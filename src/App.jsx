@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type } from 'lucide-react';
+import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon } from 'lucide-react';
 
 const App = () => {
   // --- State Management ---
@@ -57,15 +57,60 @@ const App = () => {
   // Modal state for deletion
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, groupId: null });
 
+  // Day / Night theme
+  const [isDayMode, setIsDayMode] = useState(false);
+
   // --- Theme Colors ---
-  const theme = {
+  const theme = isDayMode ? {
+    bg: 'bg-[#f5f5f0]',
+    sidebar: 'bg-[#e8e8e2]',
+    card: 'bg-[#ffffff]',
+    accent: 'bg-[#c9b800]',
+    accentText: 'text-[#7a6e00]',
+    text: 'text-[#1a1a1a]',
+    border: 'border-[#cccccc]',
+    header: 'bg-[#ededea]',
+    stagingBg: 'bg-[#f0f0ea]',
+    stagingCard: 'bg-[#e8e8e2]',
+    stagingInput: 'bg-[#ffffff]',
+    stagingBorder: 'border-[#cccccc]',
+    groupBorder: 'border-[#cccccc]',
+    groupHeader: 'bg-[#e8e8e2]/80',
+    modalCard: 'bg-[#ffffff]',
+    sidebarBorder: 'border-b border-[#d0d0ca]',
+    sidebarActive: 'bg-[#dcdcd6] text-[#7a6e00]',
+    sidebarHover: 'hover:bg-[#e0e0da]',
+    subtleText: 'text-[#888880]',
+    chordText: 'text-[#7a6e00]',
+    lyricText: 'text-[#1a1a1a]',
+    borderLight: 'border-[#dddddd]',
+    dragHandle: 'bg-[#e8e8e2]',
+    addBtn: 'border-[#aaaaaa] text-[#888880] bg-[#f5f5f0] hover:border-[#c9b800] hover:text-[#7a6e00]',
+  } : {
     bg: 'bg-[#1a1a1a]',
     sidebar: 'bg-[#2b2b2b]',
     card: 'bg-[#3a3a3a]',
     accent: 'bg-[#e0d036]',
     accentText: 'text-[#e0d036]',
     text: 'text-[#e5e5e5]',
-    border: 'border-[#444444]'
+    border: 'border-[#444444]',
+    header: 'bg-[#1f1f1f]',
+    stagingBg: 'bg-[#1a1a1a]',
+    stagingCard: 'bg-[#2b2b2b]',
+    stagingInput: 'bg-[#222222]',
+    stagingBorder: 'border-[#444444]',
+    groupBorder: 'border-[#333333]',
+    groupHeader: 'bg-[#1f1f1f]/80',
+    modalCard: 'bg-[#3a3a3a]',
+    sidebarBorder: 'border-b border-[#111111]',
+    sidebarActive: 'bg-[#444444] text-[#e0d036]',
+    sidebarHover: 'hover:bg-[#333333]',
+    subtleText: 'text-[#aaaaaa]',
+    chordText: 'text-[#e0d036]',
+    lyricText: 'text-gray-200',
+    borderLight: 'border-[#333333]',
+    dragHandle: 'bg-[#2b2b2b]',
+    addBtn: 'border-[#444444] text-[#666666] bg-[#1a1a1a] hover:border-[#e0d036] hover:text-[#e0d036]',
   };
 
   // --- Input & Tag Editor Logic ---
@@ -169,8 +214,11 @@ const App = () => {
         return { ...prev, [activeSongId]: [{ id: 'g-' + Date.now(), title: 'Verse 1', sections: [newSection] }] };
       }
       // Always append to the LAST group by default
-      const newGroups = [...currentGroups];
-      newGroups[newGroups.length - 1].sections.push(newSection);
+      const newGroups = currentGroups.map((g, idx) =>
+        idx === currentGroups.length - 1
+          ? { ...g, sections: [...g.sections, newSection] }
+          : g
+      );
       return { ...prev, [activeSongId]: newGroups };
     });
 
@@ -359,23 +407,32 @@ const App = () => {
   const activeGroups = songData[activeSongId] || [];
 
   return (
-    <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden`}>
+    <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
       
       {/* --- Left Navigation (30%) --- */}
       <div className={`w-[30%] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg z-20`}>
-        <div className="p-5 flex justify-between items-center border-b border-[#111]">
-          <h1 className="text-xl font-bold tracking-tight text-[#e0d036]">ChordScribe</h1>
-          <button onClick={addFolder} className="p-1 hover:bg-[#444] rounded transition" title="Add Folder">
-            <FolderPlus size={20} />
-          </button>
+        <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
+          <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsDayMode(!isDayMode)}
+              className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
+              title={isDayMode ? 'Switch to Night' : 'Switch to Day'}
+            >
+              {isDayMode ? <Moon size={18} /> : <Sun size={18} />}
+            </button>
+            <button onClick={addFolder} className={`p-1 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`} title="Add Folder">
+              <FolderPlus size={20} />
+            </button>
+          </div>
         </div>
         
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {folders.map(folder => (
             <div key={folder.id} className="mb-4">
-              <div className="flex justify-between items-center text-sm text-[#aaa] uppercase tracking-wider mb-2 font-semibold">
+              <div className={`flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText}`}>
                 <span>{folder.name}</span>
-                <button onClick={() => addSong(folder.id)} className="hover:text-white transition">
+                <button onClick={() => addSong(folder.id)} className={`transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`}>
                   <Plus size={16} />
                 </button>
               </div>
@@ -384,7 +441,7 @@ const App = () => {
                   <div 
                     key={song.id}
                     onClick={() => setActiveSongId(song.id)}
-                    className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${activeSongId === song.id ? 'bg-[#444] text-[#e0d036]' : 'hover:bg-[#333]'}`}
+                    className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
                   >
                     <Music size={16} />
                     <span className="text-sm truncate">{song.title}</span>
@@ -400,35 +457,35 @@ const App = () => {
       <div className="w-[70%] flex flex-col relative z-10">
         
         {/* Header */}
-        <div className="px-8 py-6 border-b border-[#222] bg-[#1f1f1f]">
+        <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.header}`}>
           <h2 className="text-3xl font-bold tracking-wide">{activeSongName}</h2>
         </div>
 
         {/* --- Token Input Area (Staging Area) --- */}
-        <div className="px-8 py-6 border-b border-[#222] bg-[#1a1a1a] shrink-0 z-20 shadow-sm relative">
-          <div className="w-full flex flex-col gap-2 bg-[#2b2b2b] p-3 rounded-xl border border-[#444] shadow-inner">
+        <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.stagingBg} shrink-0 z-20 shadow-sm relative`}>
+          <div className={`w-full flex flex-col gap-2 ${theme.stagingCard} p-3 rounded-xl border ${theme.stagingBorder} shadow-inner`}>
             
             {/* Top bar with Toggle */}
-            <div className="flex justify-between items-center px-1">
-              <span className="text-xs text-[#888] font-mono flex items-center gap-1">
-                <Edit3 size={12} /> Staging Area
-              </span>
+            <div className="flex items-center gap-3 px-1">
               <button
                 onClick={() => setIsChordMode(!isChordMode)}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all ${
                   isChordMode
                     ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
-                    : 'bg-[#444] text-gray-300 hover:bg-[#555]'
+                    : isDayMode ? 'bg-[#dcdcd6] text-gray-700 hover:bg-[#cccccc]' : 'bg-[#444] text-gray-300 hover:bg-[#555]'
                 }`}
               >
                 {isChordMode ? <Music size={12} strokeWidth={3} /> : <Type size={12} />}
                 {isChordMode ? 'CHORD MODE' : 'LYRIC MODE'}
               </button>
+              <span className={`text-xs font-mono flex items-center gap-1 ${theme.subtleText}`}>
+                <Edit3 size={12} /> Staging Area
+              </span>
             </div>
 
             <div className="flex items-start gap-3">
               <div 
-                className="flex-1 flex flex-wrap items-center bg-[#222] p-2 rounded-lg border border-[#333] min-h-[56px] cursor-text"
+                className={`flex-1 flex flex-wrap items-center ${theme.stagingInput} p-2 rounded-lg border ${theme.stagingBorder} min-h-[56px] cursor-text`}
                 onClick={() => document.getElementById('main-word-input')?.focus()}
               >
                 {stagedWords.map((sw) => {
@@ -436,30 +493,30 @@ const App = () => {
                   const isChordOnly = isX && sw.chord; // If it's a gap and has a chord, it's considered a "Chord Block"
 
                   return (
-                    <div key={sw.id} className="relative flex items-center bg-[#333] hover:bg-[#3a3a3a] border border-[#555] rounded-md px-2 py-1 m-1 group transition-colors">
+                    <div key={sw.id} className={`relative flex items-center ${isDayMode ? 'bg-[#e8e8e2] hover:bg-[#dcdcd6] border-[#cccccc]' : 'bg-[#333] hover:bg-[#3a3a3a] border-[#555]'} border rounded-md px-2 py-1 m-1 group transition-colors`}>
                       {/* Only show the word/gap text if it's NOT a chord-only block */}
                       {!isChordOnly && (
-                        <span className={`text-sm font-mono mr-1 cursor-default ${isX ? 'text-[#888] italic' : 'text-gray-200'}`}>
+                        <span className={`text-sm font-mono mr-1 cursor-default ${isX ? `${theme.subtleText} italic` : theme.text}`}>
                           {isX ? '(gap)' : sw.word}
                         </span>
                       )}
 
                       {editingChordId === sw.id ? (
-                        <div className="flex items-center text-[#e0d036] font-bold text-sm">
+                        <div className={`flex items-center ${theme.chordText} font-bold text-sm`}>
                           [<input
                             autoFocus
                             value={chordInputValue}
                             onChange={e => setChordInputValue(e.target.value)}
                             onBlur={() => saveChord(sw.id)}
                             onKeyDown={e => e.key === 'Enter' && saveChord(sw.id)}
-                            className="bg-transparent outline-none w-6 text-center text-[#e0d036] placeholder-[#888]"
+                            className={`bg-transparent outline-none w-6 text-center ${theme.chordText} placeholder-[#888]`}
                             placeholder="C"
                           />]
                         </div>
                       ) : sw.chord ? (
                         <span
                           onClick={(e) => { e.stopPropagation(); setEditingChordId(sw.id); setChordInputValue(sw.chord); }}
-                          className={`text-sm font-bold text-[#e0d036] cursor-pointer hover:text-white transition-colors ${isChordOnly ? 'ml-0' : ''}`}
+                          className={`text-sm font-bold ${theme.chordText} cursor-pointer ${isDayMode ? 'hover:text-black' : 'hover:text-white'} transition-colors ${isChordOnly ? 'ml-0' : ''}`}
                           title="Edit Chord"
                         >
                           [{sw.chord}]
@@ -467,7 +524,7 @@ const App = () => {
                       ) : (
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingChordId(sw.id); setChordInputValue(''); }}
-                          className="w-4 h-4 flex items-center justify-center text-[10px] bg-[#555] text-white rounded-full opacity-0 group-hover:opacity-100 hover:bg-[#e0d036] hover:text-black transition-all ml-1"
+                          className={`w-4 h-4 flex items-center justify-center text-[10px] ${isDayMode ? 'bg-[#cccccc] text-gray-700' : 'bg-[#555] text-white'} rounded-full opacity-0 group-hover:opacity-100 hover:bg-[#e0d036] hover:text-black transition-all ml-1`}
                         >
                           <Plus size={10} strokeWidth={3} />
                         </button>
@@ -483,7 +540,7 @@ const App = () => {
                   onKeyDown={handleInputKeyDown}
                   onPaste={handlePaste}
                   placeholder={stagedWords.length === 0 ? (isChordMode ? "Type chords (e.g. C Am F) and press Space..." : "Paste lyrics or type space to separate... ('x' for gap)") : ""}
-                  className="bg-transparent text-sm font-mono text-[#aaa] outline-none flex-1 min-w-[250px] ml-2 py-1 placeholder-[#666]"
+                  className={`bg-transparent text-sm font-mono ${theme.subtleText} outline-none flex-1 min-w-[250px] ml-2 py-1 placeholder-[#999]`}
                 />
               </div>
 
@@ -505,7 +562,7 @@ const App = () => {
         {/* --- Sections Area (Groups with Dot Grid) --- */}
         <div className="flex-1 overflow-y-auto p-6 relative">
           {activeGroups.length === 0 ? (
-            <div className="text-center text-gray-500 mt-20 flex flex-col items-center">
+            <div className={`text-center mt-20 flex flex-col items-center ${theme.subtleText}`}>
               <Music size={48} className="mb-4 opacity-20" />
               <p>Type lyrics above to start your first part.</p>
             </div>
@@ -514,25 +571,25 @@ const App = () => {
               {activeGroups.map((group) => (
                 <div 
                   key={group.id} 
-                  className="group/container border-2 border-dashed border-[#333] hover:border-[#444] rounded-xl transition-colors min-h-[140px] flex flex-col overflow-hidden"
+                  className={`group/container border-2 border-dashed ${theme.groupBorder} hover:border-opacity-70 rounded-xl transition-colors min-h-[140px] flex flex-col overflow-hidden`}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => handleGroupDrop(e, group.id)}
                 >
                   {/* Dot Grid Background overlay */}
-                  <div className="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(#888_1.5px,transparent_1.5px)] bg-[length:24px_24px] z-0"></div>
+                  <div className={`absolute inset-0 pointer-events-none opacity-10 ${isDayMode ? 'bg-[radial-gradient(#555_1.5px,transparent_1.5px)]' : 'bg-[radial-gradient(#888_1.5px,transparent_1.5px)]'} bg-[length:24px_24px] z-0`}></div>
 
                   {/* Group Header */}
-                  <div className="p-4 flex items-center gap-3 relative z-10 bg-[#1f1f1f]/80 backdrop-blur-sm border-b border-[#222]">
+                  <div className={`p-4 flex items-center gap-3 relative z-10 ${theme.groupHeader} backdrop-blur-sm border-b ${theme.borderLight}`}>
                     <input
                       value={group.title}
                       onChange={(e) => updateGroupTitle(group.id, e.target.value)}
-                      className="bg-transparent text-[#e0d036] font-bold text-xl outline-none transition-colors w-40 placeholder-[#555]"
+                      className={`bg-transparent ${theme.accentText} font-bold text-xl outline-none transition-colors w-40 placeholder-[#999]`}
                       placeholder="Part Name"
                     />
-                    <div className="flex-1 border-t border-dashed border-[#555]"></div>
+                    <div className={`flex-1 border-t border-dashed ${theme.border}`}></div>
                     <button 
                       onClick={() => requestRemoveGroup(group.id)} 
-                      className="text-[#666] hover:text-red-500 transition-colors opacity-0 group-hover/container:opacity-100"
+                      className={`${theme.subtleText} hover:text-red-500 transition-colors opacity-0 group-hover/container:opacity-100`}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -554,7 +611,7 @@ const App = () => {
                         className={`${theme.card} rounded-md shadow-md overflow-hidden border-l-4 border-[#e0d036] relative group transition-all flex`}
                       >
                         {/* Drag Handle */}
-                        <div className="w-6 bg-[#2b2b2b] flex items-center justify-center text-[#555] cursor-grab active:cursor-grabbing border-r border-[#222]">
+                        <div className={`w-6 ${theme.dragHandle} flex items-center justify-center ${theme.subtleText} cursor-grab active:cursor-grabbing border-r ${theme.borderLight}`}>
                            <GripVertical size={14} />
                         </div>
 
@@ -611,7 +668,7 @@ const App = () => {
                                       {lyricsHere.map(lyric => (
                                         <span 
                                           key={lyric.id} 
-                                          className="absolute left-0 text-base font-medium tracking-wide pl-1 font-mono text-gray-200 whitespace-nowrap pointer-events-none"
+                                          className={`absolute left-0 text-base font-medium tracking-wide pl-1 font-mono ${theme.lyricText} whitespace-nowrap pointer-events-none`}
                                         >
                                           {/* If it's the 'x' token, render nothing but it still consumes space! */}
                                           {lyric.isX ? '' : lyric.text}
@@ -634,7 +691,7 @@ const App = () => {
               {/* --- Add Group (+) Button --- */}
               <button
                 onClick={addGroup}
-                className="w-full py-6 mt-6 border-2 border-dashed border-[#444] hover:border-[#e0d036] hover:text-[#e0d036] text-[#666] bg-[#1a1a1a] rounded-xl flex flex-col items-center justify-center transition-all group/add"
+                className={`w-full py-6 mt-6 border-2 border-dashed ${theme.addBtn} rounded-xl flex flex-col items-center justify-center transition-all group/add`}
               >
                 <Plus size={32} className="group-hover/add:scale-125 transition-transform duration-300" />
                 <span className="text-xs font-bold uppercase tracking-widest mt-2 opacity-0 group-hover/add:opacity-100 transition-opacity">Add Part</span>
@@ -647,13 +704,13 @@ const App = () => {
         {/* --- Custom Confirm Modal --- */}
         {deleteConfirm.isOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className={`${theme.card} p-6 rounded-xl shadow-2xl border border-[#555] max-w-sm w-full mx-4`}>
-              <h3 className="text-xl font-bold mb-2 text-white">Delete Part?</h3>
-              <p className="text-[#aaa] mb-6">Are you sure you want to delete this entire part and all its lyrics? This action cannot be undone.</p>
+            <div className={`${theme.modalCard} p-6 rounded-xl shadow-2xl border ${theme.border} max-w-sm w-full mx-4`}>
+              <h3 className={`text-xl font-bold mb-2 ${theme.text}`}>Delete Part?</h3>
+              <p className={`${theme.subtleText} mb-6`}>Are you sure you want to delete this entire part and all its lyrics? This action cannot be undone.</p>
               <div className="flex justify-end gap-3">
                 <button
                   onClick={cancelRemoveGroup}
-                  className="px-4 py-2 rounded text-gray-300 hover:bg-[#444] transition-colors"
+                  className={`px-4 py-2 rounded ${theme.subtleText} ${isDayMode ? 'hover:bg-[#e0e0da]' : 'hover:bg-[#444]'} transition-colors`}
                 >
                   Cancel
                 </button>
