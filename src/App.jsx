@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon, X, HelpCircle, FileText, Loader2, Cloud, CloudOff, Menu } from 'lucide-react';
 import { auth, db, googleProvider } from './firebase';
-import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } from 'firebase/auth';
 import { get, ref, set } from 'firebase/database';
 
 const DEFAULT_FOLDERS = [{ id: 1, name: 'My First EP', songs: [{ id: 1, title: 'New Song Idea' }] }];
 const DEFAULT_ACTIVE_SONG_ID = 1;
+const AUTH_REDIRECT_PENDING_KEY = 'chordscribe_auth_redirect_pending';
 const CHORD_PATTERN = /^[A-G](?:#|b)?(?:maj|min|m|sus|dim|aug|add)?(?:[0-9]{0,2})?(?:[#b]?[0-9]{0,2})*(?:\/[A-G](?:#|b)?)?$/;
 
 const normalizeFolders = (rawFolders) => {
@@ -188,10 +189,30 @@ const App = () => {
 
   // --- Firebase Sync ---
   useEffect(() => {
+    const hasPendingRedirect = (() => {
+      try {
+        return sessionStorage.getItem(AUTH_REDIRECT_PENDING_KEY) === '1';
+      } catch {
+        return false;
+      }
+    })();
+
     // Fallback timeout to prevent infinite loading screen if network/Firebase hangs
     const fallbackTimeout = setTimeout(() => {
       setAuthChecking(false);
-    }, 5000);
+    }, hasPendingRedirect ? 15000 : 5000);
+
+    getRedirectResult(auth)
+      .catch((error) => {
+        console.error('Firebase redirect login error:', error);
+      })
+      .finally(() => {
+        try {
+          sessionStorage.removeItem(AUTH_REDIRECT_PENDING_KEY);
+        } catch {
+          // ignore storage access issues
+        }
+      });
 
     const unsub = onAuthStateChanged(auth, async (userAuth) => {
       clearTimeout(fallbackTimeout);
@@ -232,7 +253,11 @@ const App = () => {
       }
       setAuthChecking(false);
     });
-    return unsub;
+
+    return () => {
+      clearTimeout(fallbackTimeout);
+      unsub();
+    };
   }, []);
 
   useEffect(() => {
@@ -267,10 +292,45 @@ const App = () => {
   }, [syncStatus]);
 
   const handleLogin = async () => {
+    const isMobileBrowser = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    setAuthChecking(true);
+
     try {
+      if (isMobileBrowser) {
+        try {
+          sessionStorage.setItem(AUTH_REDIRECT_PENDING_KEY, '1');
+        } catch {
+          // ignore storage access issues
+        }
+        await signInWithRedirect(auth, googleProvider);
+        return;
+      }
+
       await signInWithPopup(auth, googleProvider);
     } catch (e) {
+      const popupFallbackErrors = [
+        'auth/popup-blocked',
+        'auth/popup-closed-by-user',
+        'auth/operation-not-supported-in-this-environment',
+        'auth/cancelled-popup-request'
+      ];
+
+      if (popupFallbackErrors.includes(e?.code)) {
+        try {
+          try {
+            sessionStorage.setItem(AUTH_REDIRECT_PENDING_KEY, '1');
+          } catch {
+            // ignore storage access issues
+          }
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectError) {
+          console.error(redirectError);
+        }
+      }
+
       console.error(e);
+      setAuthChecking(false);
     }
   };
 
@@ -727,79 +787,80 @@ const App = () => {
 
   if (!user && !isGuestMode) {
     return (
-      <div className={`flex h-[100dvh] w-full flex-col md:flex-row items-center md:items-stretch justify-between ${isDayMode ? 'bg-[#f5f5f0]' : 'bg-[#1a1a1a]'} font-sans overflow-y-auto md:overflow-hidden transition-colors duration-300 relative px-6 md:px-24 py-8 md:py-12 gap-8 md:gap-0`}>
+      <div className={`relative min-h-[100dvh] w-full overflow-hidden ${theme.bg} ${theme.text} transition-colors duration-300`}>
+        <div className={`pointer-events-none absolute -right-20 top-[-120px] h-[360px] w-[360px] rounded-full blur-3xl ${isDayMode ? 'bg-[#c9b800]/15' : 'bg-[#e0d036]/10'}`}></div>
+        <div className={`pointer-events-none absolute -left-32 bottom-[-180px] h-[360px] w-[360px] rounded-full blur-3xl ${isDayMode ? 'bg-[#7a6e00]/10' : 'bg-[#ffffff]/5'}`}></div>
 
-        {/* Left Column (Information - 60%) */}
-        <div className="flex flex-col h-auto md:h-full justify-between w-full md:w-[60%] z-10 md:pr-10">
-
-          {/* Brand Identity */}
-          <div className={`flex items-center gap-2 font-bold text-2xl tracking-tight ${theme.accentText}`}>
-            <Music size={28} />
-            <span>ChordScribe</span>
-          </div>
-
-          {/* Hero Text & Body Content */}
-          <div className="flex flex-col gap-6 justify-center flex-1 max-w-xl">
-            <h1 className={`text-4xl md:text-6xl font-extrabold tracking-tight ${theme.text}`}>Creative.</h1>
-            <h2 className={`text-xl md:text-2xl font-semibold ${theme.subtleText}`}>Write, arrange, and synchronize your music seamlessly.</h2>
-            <p className={`text-base leading-relaxed mt-4 ${theme.subtleText}`}>
-              ChordScribe empowers musicians to instantly document lyric ideas and intuitively drag-and-drop chord progressions over them. Whether you are drafting a quick chorus or mapping out an entire EP, your work automatically syncs to the cloud securely, accessible anywhere, beautifully formatted in both day and night themes, and ready for your next jam session.
-            </p>
-
-            {/* Action Buttons */}
-            <div className="mt-6 flex flex-wrap gap-4">
+        <div className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 md:flex-row md:items-center md:gap-10 md:px-10 md:py-10">
+          <div className="flex w-full flex-col gap-5 md:w-[58%] md:gap-8">
+            <div className="flex items-center justify-between">
+              <div className={`flex items-center gap-2 font-bold tracking-tight ${theme.accentText}`}>
+                <Music size={24} className="md:h-7 md:w-7" />
+                <span className="text-xl md:text-2xl">ChordScribe</span>
+              </div>
               <button
-                onClick={() => setIsGuestMode(true)}
-                className={`px-8 py-3 rounded-full font-bold tracking-widest text-sm ${isDayMode ? 'bg-[#1a1a1a] text-[#f5f5f0] hover:bg-[#333]' : 'bg-[#e0d036] text-[#1a1a1a] hover:bg-[#c9b800]'} transition-colors duration-300 shadow-lg`}
+                onClick={() => setIsDayMode(!isDayMode)}
+                className={`flex h-9 w-9 items-center justify-center rounded-full border ${theme.borderLight} ${theme.card} transition ${isDayMode ? 'hover:bg-[#ecece6]' : 'hover:bg-[#3a3a3a]'}`}
+                title={isDayMode ? 'Switch to Night' : 'Switch to Day'}
               >
-                TRY IT OUT NOW
+                {isDayMode ? <Moon size={16} /> : <Sun size={16} />}
               </button>
+            </div>
+
+            <div className="space-y-3 md:space-y-5">
+              <h1 className="text-3xl font-black leading-tight md:text-6xl">Write your next song.</h1>
+              <p className={`max-w-xl text-sm leading-relaxed md:text-lg ${theme.subtleText}`}>
+                Arrange lyrics and chords in one clean workspace, then sync everything securely to your account.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 md:gap-4">
+              <div className={`rounded-xl border p-3 md:p-4 ${theme.borderLight} ${theme.card}`}>
+                <p className={`text-[11px] font-bold tracking-wider ${theme.subtleText}`}>FAST FLOW</p>
+                <p className="mt-1 text-sm font-semibold">Capture ideas quickly</p>
+              </div>
+              <div className={`rounded-xl border p-3 md:p-4 ${theme.borderLight} ${theme.card}`}>
+                <p className={`text-[11px] font-bold tracking-wider ${theme.subtleText}`}>CHORD READY</p>
+                <p className="mt-1 text-sm font-semibold">Drag chords with precision</p>
+              </div>
+              <div className={`rounded-xl border p-3 md:p-4 ${theme.borderLight} ${theme.card}`}>
+                <p className={`text-[11px] font-bold tracking-wider ${theme.subtleText}`}>CLOUD SYNC</p>
+                <p className="mt-1 text-sm font-semibold">Continue on any device</p>
+              </div>
             </div>
           </div>
 
-          {/* Status Indicators (Carousel Mockup) */}
-          <div className="flex gap-3 items-center pb-4">
-            <div className={`w-3 h-3 rounded-full ${theme.accent}`}></div>
-            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
-            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
-            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
-            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
+          <div className="w-full md:w-[42%] md:max-w-md">
+            <div className={`rounded-3xl border p-6 shadow-2xl md:p-8 ${theme.borderLight} ${isDayMode ? 'bg-white' : 'bg-[#2b2b2b]'}`}>
+              <h3 className={`text-xs font-bold tracking-[0.2em] ${theme.subtleText}`}>SIGN IN</h3>
+              <p className={`mt-3 text-sm leading-relaxed ${theme.subtleText}`}>
+                Sign in with Google to save your folders, songs, chords, and notes automatically.
+              </p>
+
+              <button
+                onClick={handleLogin}
+                className="mt-6 flex w-full items-center justify-center gap-3 rounded-xl bg-[#4285F4] px-4 py-3.5 text-[13px] font-bold tracking-wide text-white transition-all duration-300 hover:bg-[#3367D6] hover:shadow-lg"
+              >
+                <svg className="h-5 w-5 rounded-full bg-white p-0.5" viewBox="0 0 24 24">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+                </svg>
+                LOGIN WITH GOOGLE
+              </button>
+
+              <button
+                onClick={() => setIsGuestMode(true)}
+                className={`mt-3 w-full rounded-xl border px-4 py-3 text-[12px] font-bold tracking-wider transition ${theme.borderLight} ${theme.card} ${isDayMode ? 'hover:bg-[#f0f0ea]' : 'hover:bg-[#333333]'}`}
+              >
+                CONTINUE AS GUEST
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Right Column (Interaction - 40%) */}
-        <div className="w-full md:w-[40%] h-auto md:h-full flex items-center justify-center md:justify-end z-10 md:pl-10 max-w-md">
-          {/* Card Container */}
-          <div className={`w-full p-8 md:p-10 rounded-[2rem] shadow-2xl border ${theme.borderLight} ${isDayMode ? 'bg-white' : 'bg-[#2b2b2b]'} flex flex-col items-center text-center transform transition-all duration-500`}>
-
-            {/* Header */}
-            <h3 className={`text-sm font-bold tracking-widest mb-6 ${theme.subtleText}`}>MEMBER LOGIN</h3>
-
-            <p className={`text-sm mb-10 ${theme.subtleText} px-2`}>
-              Authenticate securely with your Google account to sync your chords and lyrics across all devices.
-            </p>
-
-            {/* Submission (Google Single Sign-On remains the main interface feature) */}
-            <button
-              onClick={handleLogin}
-              className={`w-full py-4 px-4 bg-[#4285F4] text-white rounded-xl hover:bg-[#3367D6] hover:shadow-lg font-bold tracking-wide transition-all duration-300 text-[14px] flex items-center justify-center gap-3 relative overflow-hidden`}
-            >
-              <svg className="w-5 h-5 bg-white rounded-full p-0.5" viewBox="0 0 24 24">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-              </svg>
-              LOGIN WITH GOOGLE
-            </button>
-          </div>
-        </div>
-
-        {/* Decorative Background Blob for visual contrast logic */}
-        <div className={`absolute right-[-5%] top-[-5%] h-[110%] w-[45%] ${isDayMode ? 'bg-[#c9b800]/10' : 'bg-[#e0d036]/5'} rounded-l-full -z-10 blur-3xl`}></div>
-
-        {/* Footer Attribution */}
-        <div className={`absolute bottom-6 left-0 w-full text-center text-xs tracking-wider opacity-60 ${theme.subtleText}`}>
+        <div className={`relative z-10 pb-4 text-center text-[11px] tracking-wider opacity-60 md:pb-6 md:text-xs ${theme.subtleText}`}>
           Parkpoo Wisedsri with AI prompt coding
         </div>
       </div>
