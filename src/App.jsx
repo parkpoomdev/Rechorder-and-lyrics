@@ -1,23 +1,141 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon } from 'lucide-react';
+import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon, X, HelpCircle, FileText, Loader2, Cloud, CloudOff } from 'lucide-react';
 import { auth, db, googleProvider } from './firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { get, ref, set } from 'firebase/database';
+
+const DEFAULT_FOLDERS = [{ id: 1, name: 'My First EP', songs: [{ id: 1, title: 'New Song Idea' }] }];
+const DEFAULT_ACTIVE_SONG_ID = 1;
+const CHORD_PATTERN = /^[A-G](?:#|b)?(?:maj|min|m|sus|dim|aug|add)?(?:[0-9]{0,2})?(?:[#b]?[0-9]{0,2})*(?:\/[A-G](?:#|b)?)?$/;
+
+const normalizeFolders = (rawFolders) => {
+  const foldersArray = Array.isArray(rawFolders)
+    ? rawFolders
+    : (rawFolders && typeof rawFolders === 'object' ? Object.values(rawFolders) : []);
+
+  const normalized = foldersArray
+    .filter(folder => folder && typeof folder === 'object')
+    .map((folder, index) => {
+      const folderId = folder.id ?? Date.now() + index;
+      const songsArray = Array.isArray(folder.songs)
+        ? folder.songs
+        : (folder.songs && typeof folder.songs === 'object' ? Object.values(folder.songs) : []);
+
+      const songs = songsArray
+        .filter(song => song && typeof song === 'object')
+        .map((song, songIndex) => ({
+          id: song.id ?? `${folderId}-song-${songIndex}`,
+          title: typeof song.title === 'string' && song.title.trim() ? song.title : `Song ${songIndex + 1}`
+        }));
+
+      return {
+        id: folderId,
+        name: typeof folder.name === 'string' && folder.name.trim() ? folder.name : `Folder ${index + 1}`,
+        songs
+      };
+    })
+    .filter(folder => folder.songs.length > 0);
+
+  return normalized.length > 0 ? normalized : DEFAULT_FOLDERS;
+};
+
+const normalizeSongData = (rawSongData) => {
+  if (!rawSongData || typeof rawSongData !== 'object' || Array.isArray(rawSongData)) return {};
+
+  const normalizeToArray = (value) => (
+    Array.isArray(value) ? value : (value && typeof value === 'object' ? Object.values(value) : [])
+  );
+
+  const safeData = {};
+
+  Object.entries(rawSongData).forEach(([songId, groupsRaw]) => {
+    const groups = normalizeToArray(groupsRaw)
+      .filter(group => group && typeof group === 'object')
+      .map((group, groupIndex) => {
+        const sections = normalizeToArray(group.sections)
+          .filter(section => section && typeof section === 'object')
+          .map((section, sectionIndex) => {
+            const lyrics = normalizeToArray(section.lyrics)
+              .filter(lyric => lyric && typeof lyric === 'object')
+              .map((lyric, lyricIndex) => ({
+                id: lyric.id ?? `l-${songId}-${groupIndex}-${sectionIndex}-${lyricIndex}`,
+                text: typeof lyric.text === 'string' ? lyric.text : '',
+                pos: Number.isFinite(Number(lyric.pos)) ? Number(lyric.pos) : 0,
+                isX: Boolean(lyric.isX)
+              }));
+
+            const chords = normalizeToArray(section.chords)
+              .filter(chord => chord && typeof chord === 'object')
+              .map((chord, chordIndex) => ({
+                id: chord.id ?? `c-${songId}-${groupIndex}-${sectionIndex}-${chordIndex}`,
+                text: typeof chord.text === 'string' ? chord.text : '',
+                pos: Number.isFinite(Number(chord.pos)) ? Number(chord.pos) : 0
+              }));
+
+            return {
+              id: section.id ?? `sec-${songId}-${groupIndex}-${sectionIndex}`,
+              lyrics,
+              chords
+            };
+          });
+
+        return {
+          id: group.id ?? `g-${songId}-${groupIndex}`,
+          title: typeof group.title === 'string' && group.title.trim() ? group.title : `Part ${groupIndex + 1}`,
+          sections
+        };
+      });
+
+    safeData[songId] = groups;
+  });
+
+  return safeData;
+};
+
+const normalizeNotes = (rawNotes) => (
+  rawNotes && typeof rawNotes === 'object' && !Array.isArray(rawNotes) ? rawNotes : {}
+);
+
+const normalizeChordInput = (rawValue) => {
+  if (!rawValue) return '';
+  let value = rawValue
+    .replace(/[\[\]\s]+/g, '')
+    .replace(/♯/g, '#')
+    .replace(/♭/g, 'b');
+
+  const rootMatch = value.match(/^([A-Ga-g])([#b]?)(.*)$/);
+  if (!rootMatch) return value;
+
+  const [, root, accidental, rest] = rootMatch;
+  let normalizedRest = rest || '';
+  normalizedRest = normalizedRest.replace(/^MIN/i, 'm').replace(/^MAJ/i, 'maj');
+  normalizedRest = normalizedRest.replace(/\/([A-Ga-g])([#b]?)/g, (_, bassRoot, bassAcc) => `/${bassRoot.toUpperCase()}${bassAcc || ''}`);
+
+  return `${root.toUpperCase()}${accidental || ''}${normalizedRest}`;
+};
+
+const toValidChord = (rawValue) => {
+  const normalized = normalizeChordInput(rawValue);
+  if (!normalized) return null;
+  return CHORD_PATTERN.test(normalized) ? normalized : null;
+};
 
 const App = () => {
   // --- Firebase Auth State ---
   const [user, setUser] = useState(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [isGuestMode, setIsGuestMode] = useState(false);
+  const [showManual, setShowManual] = useState(true);
   const dataLoadedRef = useRef(false);
 
+  const [notes, setNotes] = useState({});
+  const [showNoteModal, setShowNoteModal] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('saved'); // 'saved', 'saving', 'error'
+  const [isChordSyntaxError, setIsChordSyntaxError] = useState(false);
+
   // --- State Management ---
-  const [folders, setFolders] = useState([
-    {
-      id: 1,
-      name: 'My First EP',
-      songs: [{ id: 1, title: 'New Song Idea' }]
-    }
-  ]);
-  const [activeSongId, setActiveSongId] = useState(1);
+  const [folders, setFolders] = useState(DEFAULT_FOLDERS);
+  const [activeSongId, setActiveSongId] = useState(DEFAULT_ACTIVE_SONG_ID);
 
   // Data Structure is now grouped by Song Parts (Intro, Verse, etc.)
   const [songData, setSongData] = useState({
@@ -69,34 +187,83 @@ const App = () => {
 
   // --- Firebase Sync ---
   useEffect(() => {
+    // Fallback timeout to prevent infinite loading screen if network/Firebase hangs
+    const fallbackTimeout = setTimeout(() => {
+      setAuthChecking(false);
+    }, 5000);
+
     const unsub = onAuthStateChanged(auth, async (userAuth) => {
+      clearTimeout(fallbackTimeout);
       setUser(userAuth);
       if (userAuth) {
-        const docRef = doc(db, 'users', userAuth.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.folders) setFolders(data.folders);
-          if (data.songData) setSongData(data.songData);
+        try {
+          const userRef = ref(db, `users/${userAuth.uid}`);
+          const snapshot = await get(userRef);
+          if (snapshot.exists()) {
+            const data = snapshot.val();
+            const safeFolders = normalizeFolders(data?.folders);
+            const safeSongData = normalizeSongData(data?.songData);
+            const safeNotes = normalizeNotes(data?.notes);
+
+            setFolders(safeFolders);
+            setActiveSongId(safeFolders[0]?.songs?.[0]?.id ?? DEFAULT_ACTIVE_SONG_ID);
+            setSongData(safeSongData);
+            setNotes(safeNotes);
+          } else {
+            // New User completely
+            setFolders(DEFAULT_FOLDERS);
+            setActiveSongId(DEFAULT_ACTIVE_SONG_ID);
+          }
+          // VERY IMPORTANT: Only allow saving AFTER we know we've pulled the cloud data
+          dataLoadedRef.current = true;
+        } catch (error) {
+          console.error("Firebase error getting user data:", error);
+          // If network error, don't allow saving to prevent accidental overwrites
+          dataLoadedRef.current = false;
         }
-        dataLoadedRef.current = true;
       } else {
         dataLoadedRef.current = false;
+        // Reset state on logout to prevent data bleed handling
+        setFolders(DEFAULT_FOLDERS);
+        setSongData({});
+        setNotes({});
+        setActiveSongId(DEFAULT_ACTIVE_SONG_ID);
       }
+      setAuthChecking(false);
     });
     return unsub;
   }, []);
 
   useEffect(() => {
     if (!user || !dataLoadedRef.current) return;
+
+    setSyncStatus('saving');
     const timeoutId = setTimeout(() => {
-      setDoc(doc(db, 'users', user.uid), {
+      set(ref(db, `users/${user.uid}`), {
         folders,
-        songData
-      }, { merge: true }).catch(err => console.error("Error saving to Firebase:", err));
-    }, 1000);
+        songData,
+        notes
+      })
+        .then(() => setSyncStatus('saved'))
+        .catch(err => {
+          console.error("Error saving to Firebase:", err);
+          setSyncStatus('error');
+        });
+    }, 500);
     return () => clearTimeout(timeoutId);
-  }, [folders, songData, user]);
+  }, [folders, songData, notes, user]);
+
+  // Warn user if they try to leave the page while saving is not finished
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (syncStatus === 'saving') {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [syncStatus]);
 
   const handleLogin = async () => {
     try {
@@ -108,10 +275,20 @@ const App = () => {
 
   const handleLogout = async () => {
     try {
+      // Force an immediate save before logging out to ensure no data is lost
+      if (user && dataLoadedRef.current) {
+        setSyncStatus('saving');
+        await set(ref(db, `users/${user.uid}`), {
+          folders,
+          songData,
+          notes
+        });
+        setSyncStatus('saved');
+      }
       await signOut(auth);
       dataLoadedRef.current = false;
     } catch (e) {
-      console.error(e);
+      console.error("Error during logout:", e);
     }
   };
 
@@ -169,14 +346,29 @@ const App = () => {
   };
 
   // --- Input & Tag Editor Logic ---
+  const applyMainInputValue = (raw) => {
+    if (isChordMode) {
+      setInputValue(normalizeChordInput(raw));
+      setIsChordSyntaxError(false);
+      return;
+    }
+    setInputValue(raw);
+  };
+
   const handleInputKeyDown = (e) => {
     if (e.key === ' ') {
       e.preventDefault();
       if (inputValue.trim()) {
         const val = inputValue.trim();
         if (isChordMode) {
+          const validChord = toValidChord(val);
+          if (!validChord) {
+            setIsChordSyntaxError(true);
+            return;
+          }
           // If in Chord Mode, treat input as a gap ('x') and set the text as its chord
-          setStagedWords([...stagedWords, { id: Date.now().toString(), word: 'x', chord: val.replace(/[\[\]]/g, '') }]);
+          setStagedWords([...stagedWords, { id: Date.now().toString(), word: 'x', chord: validChord }]);
+          setIsChordSyntaxError(false);
         } else {
           setStagedWords([...stagedWords, { id: Date.now().toString(), word: val, chord: null }]);
         }
@@ -202,27 +394,46 @@ const App = () => {
 
     const newWords = words.map((w, i) => {
       if (isChordMode) {
+        const validChord = toValidChord(w);
+        if (!validChord) return null;
         // In Chord Mode, everything pasted becomes a chord on an empty gap
-        return { id: Date.now() + i.toString(), word: 'x', chord: w.replace(/[\[\]]/g, '') };
+        return { id: Date.now() + i.toString(), word: 'x', chord: validChord };
       } else {
         let word = w;
         let chord = null;
         const matchEnd = w.match(/^(.*?)\[(.*?)\]$/);
         const matchStart = w.match(/^\[(.*?)\](.*)$/);
 
-        if (matchEnd) { word = matchEnd[1]; chord = matchEnd[2]; }
-        else if (matchStart) { chord = matchStart[1]; word = matchStart[2]; }
+        if (matchEnd) {
+          word = matchEnd[1];
+          chord = toValidChord(matchEnd[2]);
+        } else if (matchStart) {
+          chord = toValidChord(matchStart[1]);
+          word = matchStart[2];
+        }
 
         return { id: Date.now() + i.toString(), word, chord };
       }
-    });
+    }).filter(Boolean);
 
     setStagedWords([...stagedWords, ...newWords]);
   };
 
   const saveChord = (id) => {
     const val = chordInputValue.trim();
-    setStagedWords(stagedWords.map(w => w.id === id ? { ...w, chord: val === '' ? null : val } : w));
+    if (val === '') {
+      setStagedWords(stagedWords.map(w => w.id === id ? { ...w, chord: null } : w));
+      setEditingChordId(null);
+      return;
+    }
+
+    const validChord = toValidChord(val);
+    if (!validChord) {
+      setChordInputValue(normalizeChordInput(val));
+      return;
+    }
+
+    setStagedWords(stagedWords.map(w => w.id === id ? { ...w, chord: validChord } : w));
     setEditingChordId(null);
   };
 
@@ -231,7 +442,13 @@ const App = () => {
     if (inputValue.trim()) {
       const val = inputValue.trim();
       if (isChordMode) {
-        finalWords.push({ id: Date.now().toString(), word: 'x', chord: val.replace(/[\[\]]/g, '') });
+        const validChord = toValidChord(val);
+        if (!validChord) {
+          setIsChordSyntaxError(true);
+          return;
+        }
+        finalWords.push({ id: Date.now().toString(), word: 'x', chord: validChord });
+        setIsChordSyntaxError(false);
       } else {
         finalWords.push({ id: Date.now().toString(), word: val, chord: null });
       }
@@ -467,10 +684,12 @@ const App = () => {
   const deleteSong = (e, folderId, songId) => {
     e.stopPropagation();
     if (window.confirm("Are you sure you want to delete this song?")) {
-      setFolders(folders.map(f => f.id === folderId ? {
+      const updatedFolders = folders.map(f => f.id === folderId ? {
         ...f,
         songs: f.songs.filter(s => s.id !== songId)
-      } : f));
+      } : f);
+
+      setFolders(updatedFolders);
 
       setSongData(prev => {
         const newData = { ...prev };
@@ -479,7 +698,9 @@ const App = () => {
       });
 
       if (activeSongId === songId) {
-        setActiveSongId(null);
+        // Fallback to the first available song
+        const firstAvailable = updatedFolders.find(f => f.songs.length > 0)?.songs[0];
+        setActiveSongId(firstAvailable ? firstAvailable.id : null);
       }
     }
   };
@@ -490,104 +711,238 @@ const App = () => {
     if (song) activeSongName = song.title;
   });
 
-  const activeGroups = songData[activeSongId] || [];
+  const activeGroups = Array.isArray(songData[activeSongId]) ? songData[activeSongId] : [];
 
-  return (
-    <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
+  if (authChecking) {
+    return (
+      <div className={`flex h-screen w-full items-center justify-center ${theme.bg} ${theme.text} transition-colors duration-300`}>
+        <div className="animate-pulse flex flex-col items-center gap-4">
+          <Music size={40} className={`opacity-50 ${theme.accentText} animate-bounce`} />
+          <p className={`${theme.subtleText} text-sm font-medium tracking-widest uppercase`}>Loading workspace...</p>
+        </div>
+      </div>
+    );
+  }
 
-      {/* --- Left Navigation (30%) --- */}
-      <div className={`w-[30%] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg z-20`}>
-        <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
-          <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
-          <div className="flex items-center gap-2">
+  if (!user && !isGuestMode) {
+    return (
+      <div className={`flex h-screen w-full items-center justify-between ${isDayMode ? 'bg-[#f5f5f0]' : 'bg-[#1a1a1a]'} font-sans overflow-hidden transition-colors duration-300 relative px-12 md:px-24 py-12`}>
+
+        {/* Left Column (Information - 60%) */}
+        <div className="flex flex-col h-full justify-between w-[60%] z-10 pr-10">
+
+          {/* Brand Identity */}
+          <div className={`flex items-center gap-2 font-bold text-2xl tracking-tight ${theme.accentText}`}>
+            <Music size={28} />
+            <span>ChordScribe</span>
+          </div>
+
+          {/* Hero Text & Body Content */}
+          <div className="flex flex-col gap-6 justify-center flex-1 max-w-xl">
+            <h1 className={`text-6xl font-extrabold tracking-tight ${theme.text}`}>Creative.</h1>
+            <h2 className={`text-2xl font-semibold ${theme.subtleText}`}>Write, arrange, and synchronize your music seamlessly.</h2>
+            <p className={`text-base leading-relaxed mt-4 ${theme.subtleText}`}>
+              ChordScribe empowers musicians to instantly document lyric ideas and intuitively drag-and-drop chord progressions over them. Whether you are drafting a quick chorus or mapping out an entire EP, your work automatically syncs to the cloud securely, accessible anywhere, beautifully formatted in both day and night themes, and ready for your next jam session.
+            </p>
+
+            {/* Action Buttons */}
+            <div className="mt-6 flex flex-wrap gap-4">
+              <button
+                onClick={() => setIsGuestMode(true)}
+                className={`px-8 py-3 rounded-full font-bold tracking-widest text-sm ${isDayMode ? 'bg-[#1a1a1a] text-[#f5f5f0] hover:bg-[#333]' : 'bg-[#e0d036] text-[#1a1a1a] hover:bg-[#c9b800]'} transition-colors duration-300 shadow-lg`}
+              >
+                TRY IT OUT NOW
+              </button>
+            </div>
+          </div>
+
+          {/* Status Indicators (Carousel Mockup) */}
+          <div className="flex gap-3 items-center pb-4">
+            <div className={`w-3 h-3 rounded-full ${theme.accent}`}></div>
+            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
+            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
+            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
+            <div className={`w-2 h-2 rounded-full ${isDayMode ? 'bg-gray-300' : 'bg-gray-700'}`}></div>
+          </div>
+        </div>
+
+        {/* Right Column (Interaction - 40%) */}
+        <div className="w-[40%] h-full flex items-center justify-end z-10 pl-10 max-w-md">
+          {/* Card Container */}
+          <div className={`w-full p-10 rounded-[2rem] shadow-2xl border ${theme.borderLight} ${isDayMode ? 'bg-white' : 'bg-[#2b2b2b]'} flex flex-col items-center text-center transform transition-all duration-500`}>
+
+            {/* Header */}
+            <h3 className={`text-sm font-bold tracking-widest mb-6 ${theme.subtleText}`}>MEMBER LOGIN</h3>
+
+            <p className={`text-sm mb-10 ${theme.subtleText} px-2`}>
+              Authenticate securely with your Google account to sync your chords and lyrics across all devices.
+            </p>
+
+            {/* Submission (Google Single Sign-On remains the main interface feature) */}
             <button
-              onClick={() => setIsDayMode(!isDayMode)}
-              className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
-              title={isDayMode ? 'Switch to Night' : 'Switch to Day'}
+              onClick={handleLogin}
+              className={`w-full py-4 px-4 bg-[#4285F4] text-white rounded-xl hover:bg-[#3367D6] hover:shadow-lg font-bold tracking-wide transition-all duration-300 text-[14px] flex items-center justify-center gap-3 relative overflow-hidden`}
             >
-              {isDayMode ? <Moon size={18} /> : <Sun size={18} />}
-            </button>
-            <button onClick={addFolder} className={`p-1 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`} title="Add Folder">
-              <FolderPlus size={20} />
+              <svg className="w-5 h-5 bg-white rounded-full p-0.5" viewBox="0 0 24 24">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+              </svg>
+              LOGIN WITH GOOGLE
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {folders.map(folder => (
-            <div key={folder.id} className="mb-4">
-              <div className={`flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText}`}>
-                <span>{folder.name}</span>
-                <button onClick={() => addSong(folder.id)} className={`transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`}>
-                  <Plus size={16} />
-                </button>
-              </div>
-              <div className="space-y-1">
-                {folder.songs.map(song => (
-                  <div
-                    key={song.id}
-                    onClick={() => setActiveSongId(song.id)}
-                    className={`group flex items-center justify-between p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
-                  >
-                    <div className="flex items-center gap-2 truncate flex-1 min-w-0">
-                      <Music size={16} className="shrink-0" />
-                      <span className="text-sm truncate">{song.title}</span>
-                    </div>
-                    <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1 shrink-0 bg-inherit pl-2">
-                      <button
-                        onClick={(e) => renameSong(e, folder.id, song.id, song.title)}
-                        className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-[#e0d036] transition`}
-                        title="Rename Song"
-                      >
-                        <Edit3 size={14} />
-                      </button>
-                      <button
-                        onClick={(e) => deleteSong(e, folder.id, song.id)}
-                        className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-red-500 transition`}
-                        title="Delete Song"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+        {/* Decorative Background Blob for visual contrast logic */}
+        <div className={`absolute right-[-5%] top-[-5%] h-[110%] w-[45%] ${isDayMode ? 'bg-[#c9b800]/10' : 'bg-[#e0d036]/5'} rounded-l-full -z-10 blur-3xl`}></div>
 
-        {/* --- Profile / Login --- */}
-        <div className={`p-4 border-t ${theme.borderLight}`}>
-          {user ? (
+        {/* Footer Attribution */}
+        <div className={`absolute bottom-6 left-0 w-full text-center text-xs tracking-wider opacity-60 ${theme.subtleText}`}>
+          Parkpoo Wisedsri with AI prompt coding
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
+
+      {/* --- Left Navigation (30%) - Hidden in Guest Mode --- */}
+      {!isGuestMode && (
+        <div className={`w-[30%] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg z-20`}>
+          <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
+            <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowManual(true)}
+                className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
+                title="How to Use"
+              >
+                <HelpCircle size={18} />
+              </button>
+              <button
+                onClick={() => setIsDayMode(!isDayMode)}
+                className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
+                title={isDayMode ? 'Switch to Night' : 'Switch to Day'}
+              >
+                {isDayMode ? <Moon size={18} /> : <Sun size={18} />}
+              </button>
+              <button onClick={addFolder} className={`p-1 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`} title="Add Folder">
+                <FolderPlus size={20} />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {folders.map(folder => (
+              <div key={folder.id} className="mb-4">
+                <div className={`flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText}`}>
+                  <span>{folder.name}</span>
+                  <button onClick={() => addSong(folder.id)} className={`transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`}>
+                    <Plus size={16} />
+                  </button>
+                </div>
+                <div className="space-y-1">
+                  {folder.songs.map(song => (
+                    <div
+                      key={song.id}
+                      onClick={() => setActiveSongId(song.id)}
+                      className={`group flex items-center justify-between p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
+                    >
+                      <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                        <Music size={16} className="shrink-0" />
+                        <span className="text-sm truncate">{song.title}</span>
+                      </div>
+                      <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1 shrink-0 bg-inherit pl-2">
+                        <button
+                          onClick={(e) => renameSong(e, folder.id, song.id, song.title)}
+                          className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-[#e0d036] transition`}
+                          title="Rename Song"
+                        >
+                          <Edit3 size={14} />
+                        </button>
+                        <button
+                          onClick={(e) => deleteSong(e, folder.id, song.id)}
+                          className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-red-500 transition`}
+                          title="Delete Song"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* --- Profile --- */}
+          <div className={`p-4 border-t ${theme.borderLight}`}>
             <div className={`flex items-center justify-between`}>
               <div className="flex items-center gap-2 overflow-hidden mr-2">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt="avatar" className="w-8 h-8 rounded-full" />
+                {user?.photoURL ? (
+                  <img src={user.photoURL} alt="avatar" className="w-8 h-8 rounded-full shadow-sm" />
                 ) : (
-                  <div className="w-8 h-8 rounded-full bg-[#e0d036] flex items-center justify-center text-black font-bold text-sm shrink-0">
-                    {user.email?.[0]?.toUpperCase()}
+                  <div className="w-8 h-8 rounded-full bg-[#e0d036] flex items-center justify-center text-black font-bold text-sm shrink-0 shadow-sm">
+                    {user?.email?.[0]?.toUpperCase()}
                   </div>
                 )}
-                <div className="truncate text-sm font-medium" title={user.email}>{user.displayName || user.email}</div>
+                <div className="truncate text-sm font-medium" title={user?.email}>{user?.displayName || user?.email}</div>
               </div>
-              <button onClick={handleLogout} className={`px-2 py-1 text-xs rounded border ${theme.borderLight} hover:bg-red-500/20 hover:text-red-500 transition`}>
+              <button onClick={handleLogout} className={`px-2 py-1.5 text-xs font-semibold rounded border ${theme.borderLight} hover:bg-red-500 hover:text-white hover:border-red-500 transition-colors`}>
                 Logout
               </button>
             </div>
-          ) : (
-            <button onClick={handleLogin} className={`w-full py-2 bg-[#4285F4] text-white rounded-md hover:bg-[#3367D6] font-medium transition text-sm flex items-center justify-center gap-2`}>
-              Login with Google
-            </button>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* --- Right Content (70%) --- */}
-      <div className="w-[70%] flex flex-col relative z-10">
+      {/* --- Right Content (70% or Full Width Centered in Guest Mode) --- */}
+      <div className={`flex flex-col relative z-10 ${isGuestMode ? 'w-full max-w-4xl mx-auto border-x ' + theme.borderLight : 'w-[70%]'}`}>
 
         {/* Header */}
-        <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.header}`}>
-          <h2 className="text-3xl font-bold tracking-wide">{activeSongName}</h2>
+        <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.header} flex justify-between items-center z-10`}>
+          <div className="flex items-center gap-4">
+            <h2 className="text-3xl font-bold tracking-wide">{activeSongName}</h2>
+            {!isGuestMode && user && (
+              <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full transition-all duration-300 ${syncStatus === 'saving' ? (isDayMode ? 'bg-[#c9b800]/20 text-[#7a6e00]' : 'bg-[#e0d036]/20 text-[#e0d036]') : syncStatus === 'error' ? 'bg-red-500/20 text-red-500' : (isDayMode ? 'bg-green-500/20 text-green-700' : 'bg-green-500/20 text-green-400')}`}>
+                {syncStatus === 'saving' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {syncStatus === 'saved' && <Cloud className="w-3.5 h-3.5" />}
+                {syncStatus === 'error' && <CloudOff className="w-3.5 h-3.5" />}
+                {syncStatus === 'saving' ? 'Saving...' : syncStatus === 'saved' ? 'Saved to Cloud' : 'Sync Error'}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            {isGuestMode && (
+              <>
+                <button
+                  onClick={() => setShowManual(true)}
+                  className={`p-2 rounded-full ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors shadow-sm`}
+                  title="How to Use"
+                >
+                  <HelpCircle size={20} />
+                </button>
+                <button
+                  onClick={() => setIsGuestMode(false)}
+                  className={`px-5 py-2.5 text-sm font-bold uppercase tracking-widest rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors shadow-md`}
+                >
+                  Sign Up to Save
+                </button>
+              </>
+            )}
+            {!isGuestMode && user && (
+              <button
+                onClick={() => setShowNoteModal(true)}
+                className={`p-2 rounded-full ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors shadow-sm`}
+                title="Quick Note"
+              >
+                <FileText size={20} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* --- Token Input Area (Staging Area) --- */}
@@ -596,16 +951,26 @@ const App = () => {
 
             {/* Top bar with Toggle */}
             <div className="flex items-center gap-3 px-1">
-              <button
-                onClick={() => setIsChordMode(!isChordMode)}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all ${isChordMode
-                  ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
-                  : isDayMode ? 'bg-[#dcdcd6] text-gray-700 hover:bg-[#cccccc]' : 'bg-[#444] text-gray-300 hover:bg-[#555]'
-                  }`}
-              >
-                {isChordMode ? <Music size={12} strokeWidth={3} /> : <Type size={12} />}
-                {isChordMode ? 'CHORD MODE' : 'LYRIC MODE'}
-              </button>
+              <div className={`inline-flex items-center rounded-full p-1 border ${theme.stagingBorder} ${isDayMode ? 'bg-[#efefe8]' : 'bg-[#222]'}`}>
+                <button
+                  onClick={() => { setIsChordMode(false); setIsChordSyntaxError(false); }}
+                  className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${!isChordMode
+                    ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
+                    : isDayMode ? 'text-gray-700 hover:bg-[#d8d8d0]' : 'text-gray-300 hover:bg-[#444]'
+                    }`}
+                >
+                  <Type size={12} /> LYRIC
+                </button>
+                <button
+                  onClick={() => { setIsChordMode(true); setIsChordSyntaxError(false); }}
+                  className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${isChordMode
+                    ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
+                    : isDayMode ? 'text-gray-700 hover:bg-[#d8d8d0]' : 'text-gray-300 hover:bg-[#444]'
+                    }`}
+                >
+                  <Music size={12} strokeWidth={3} /> CHORD
+                </button>
+              </div>
               <span className={`text-xs font-mono flex items-center gap-1 ${theme.subtleText}`}>
                 <Edit3 size={12} /> Staging Area
               </span>
@@ -614,7 +979,10 @@ const App = () => {
             <div className="flex items-start gap-3">
               <div
                 className={`flex-1 flex flex-wrap items-center ${theme.stagingInput} p-2 rounded-lg border ${theme.stagingBorder} min-h-[56px] cursor-text`}
-                onClick={() => document.getElementById('main-word-input')?.focus()}
+                onClick={(e) => {
+                  if (e.target.closest('[data-stop-main-focus="true"]')) return;
+                  document.getElementById('main-word-input')?.focus();
+                }}
               >
                 {stagedWords.map((sw) => {
                   const isX = sw.word.toLowerCase() === 'x';
@@ -630,13 +998,20 @@ const App = () => {
                       )}
 
                       {editingChordId === sw.id ? (
-                        <div className={`flex items-center ${theme.chordText} font-bold text-sm relative z-50`}>
+                        <div
+                          data-stop-main-focus="true"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`flex items-center ${theme.chordText} font-bold text-sm relative z-50`}
+                        >
                           [<input
                             autoFocus
                             value={chordInputValue}
-                            onChange={e => setChordInputValue(e.target.value)}
-                            onBlur={() => saveChord(sw.id)}
-                            onKeyDown={e => e.key === 'Enter' && saveChord(sw.id)}
+                            onChange={e => setChordInputValue(normalizeChordInput(e.target.value))}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') saveChord(sw.id);
+                              if (e.key === 'Escape') setEditingChordId(null);
+                            }}
                             className={`bg-transparent outline-none min-w-[30px] w-auto text-center ${theme.chordText} placeholder-[#888]`}
                             placeholder="C"
                             size={chordInputValue.length || 1}
@@ -656,6 +1031,17 @@ const App = () => {
                                 </button>
                               </div>
                             </div>
+
+                            <input
+                              value={chordInputValue}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onChange={(e) => setChordInputValue(normalizeChordInput(e.target.value))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveChord(sw.id);
+                              }}
+                              placeholder="Type root chord (e.g. F#, Bb, Cmaj7)"
+                              className={`w-full px-2 py-1.5 text-xs rounded border ${isDayMode ? 'border-gray-300 bg-white text-black' : 'border-[#555] bg-[#1f1f1f] text-white'} outline-none`}
+                            />
 
                             <div className="grid grid-cols-4 gap-1.5">
                               {['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'].map(root => (
@@ -680,9 +1066,9 @@ const App = () => {
                                     let current = chordInputValue;
                                     const match = current.match(/^[A-G][b#]?/i);
                                     if (match) {
-                                      setChordInputValue(match[0].toUpperCase() + ext);
+                                      setChordInputValue(normalizeChordInput(match[0].toUpperCase() + ext));
                                     } else {
-                                      setChordInputValue(current + ext);
+                                      setChordInputValue(normalizeChordInput(current + ext));
                                     }
                                   }}
                                   className={`py-1 text-[11px] font-medium rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-200' : 'border-[#444] bg-[#333] text-gray-300 hover:bg-[#444]'} transition-colors`}
@@ -690,6 +1076,23 @@ const App = () => {
                                   {ext}
                                 </button>
                               ))}
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-1">
+                              <button
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => { e.stopPropagation(); setEditingChordId(null); }}
+                                className={`px-2 py-1 text-[11px] rounded border ${isDayMode ? 'border-gray-300 text-gray-700 hover:bg-gray-100' : 'border-[#555] text-gray-300 hover:bg-[#333]'}`}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => { e.stopPropagation(); saveChord(sw.id); }}
+                                className="px-2 py-1 text-[11px] rounded bg-[#e0d036] text-black font-bold hover:bg-yellow-400"
+                              >
+                                Apply
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -716,7 +1119,7 @@ const App = () => {
                 <input
                   id="main-word-input"
                   value={inputValue}
-                  onChange={e => setInputValue(e.target.value)}
+                  onChange={e => applyMainInputValue(e.target.value)}
                   onKeyDown={handleInputKeyDown}
                   onPaste={handlePaste}
                   placeholder={stagedWords.length === 0 ? (isChordMode ? "Type chords (e.g. C Am F) and press Space..." : "Paste lyrics or type space to separate... ('x' for gap)") : ""}
@@ -735,6 +1138,9 @@ const App = () => {
                 <Check size={24} strokeWidth={3} />
               </button>
             </div>
+            {isChordMode && isChordSyntaxError && (
+              <p className="px-2 text-xs text-red-500 font-medium">Invalid chord format. Example: C, F#, Bb, Am, Cmaj7, D/F#</p>
+            )}
           </div>
         </div>
 
@@ -776,7 +1182,7 @@ const App = () => {
 
                   {/* Droppable Area for Sections */}
                   <div className="flex-1 p-4 space-y-3 relative z-10">
-                    {group.sections.map((section) => {
+                    {(Array.isArray(group.sections) ? group.sections : []).map((section) => {
                       // เช็คว่า section นี้เป็นคอร์ดเพียวๆ หรือไม่ (คำทั้งหมดเป็น 'x')
                       const isChordOnlySection = section.lyrics && section.lyrics.length > 0 && section.lyrics.every(l => l.isX);
 
@@ -805,8 +1211,10 @@ const App = () => {
                           <div className={`flex-1 overflow-hidden relative ${isChordOnlySection ? 'py-1 px-3' : 'p-3 pt-4'}`}>
                             <div className={`grid grid-cols-[repeat(32,minmax(0,1fr))] relative group/grid ${isChordOnlySection ? '' : 'mb-1'}`}>
                               {Array.from({ length: 32 }).map((_, i) => {
-                                const chordsHere = section.chords.filter(c => c.pos === i);
-                                const lyricsHere = section.lyrics ? section.lyrics.filter(l => l.pos === i) : [];
+                                const sectionChords = Array.isArray(section.chords) ? section.chords : [];
+                                const sectionLyrics = Array.isArray(section.lyrics) ? section.lyrics : [];
+                                const chordsHere = sectionChords.filter(c => c.pos === i);
+                                const lyricsHere = sectionLyrics.filter(l => l.pos === i);
 
                                 return (
                                   <div
@@ -881,31 +1289,116 @@ const App = () => {
           )}
         </div>
 
-        {/* --- Custom Confirm Modal --- */}
-        {deleteConfirm.isOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className={`${theme.modalCard} p-6 rounded-xl shadow-2xl border ${theme.border} max-w-sm w-full mx-4`}>
-              <h3 className={`text-xl font-bold mb-2 ${theme.text}`}>Delete Part?</h3>
-              <p className={`${theme.subtleText} mb-6`}>Are you sure you want to delete this entire part and all its lyrics? This action cannot be undone.</p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={cancelRemoveGroup}
-                  className={`px-4 py-2 rounded ${theme.subtleText} ${isDayMode ? 'hover:bg-[#e0e0da]' : 'hover:bg-[#444]'} transition-colors`}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmRemoveGroup}
-                  className="px-4 py-2 rounded bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white transition-colors font-bold"
-                >
-                  Delete
-                </button>
-              </div>
+      </div>
+
+      {/* --- MODALS MOVED TO ROOT TO FIX Z-INDEX OVERLAP --- */}
+      {/* --- Custom Confirm Modal --- */}
+      {deleteConfirm.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className={`${theme.modalCard} p-6 rounded-xl shadow-2xl border ${theme.border} max-w-sm w-full mx-4`}>
+            <h3 className={`text-xl font-bold mb-2 ${theme.text}`}>Delete Part?</h3>
+            <p className={`${theme.subtleText} mb-6`}>Are you sure you want to delete this entire part and all its lyrics? This action cannot be undone.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={cancelRemoveGroup}
+                className={`px-4 py-2 rounded ${theme.subtleText} ${isDayMode ? 'hover:bg-[#e0e0da]' : 'hover:bg-[#444]'} transition-colors`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRemoveGroup}
+                className="px-4 py-2 rounded bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white transition-colors font-bold"
+              >
+                Delete
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-      </div>
+      {/* --- Manual Pop Up (How to use) --- */}
+      {showManual && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className={`${theme.modalCard} p-8 rounded-2xl shadow-2xl border ${theme.border} max-w-2xl w-full mx-4 flex flex-col relative`}>
+            <button
+              onClick={() => setShowManual(false)}
+              className={`absolute top-4 right-4 p-2 rounded-full ${isDayMode ? 'hover:bg-gray-200' : 'hover:bg-gray-700'} transition-colors`}
+            >
+              <X size={20} className={theme.subtleText} />
+            </button>
+
+            <div className={`flex items-center gap-3 mb-6 ${theme.accentText}`}>
+              <HelpCircle size={32} />
+              <h2 className="text-3xl font-extrabold tracking-tight">How to use ChordScribe</h2>
+            </div>
+
+            <div className={`space-y-4 mb-8 ${theme.text} text-sm leading-relaxed overflow-y-auto max-h-[60vh] pr-2`}>
+              <div className={`p-4 rounded-xl border ${theme.borderLight} ${isDayMode ? 'bg-gray-50' : 'bg-[#2a2a2a]'}`}>
+                <h3 className="font-bold text-lg mb-2 flex items-center gap-2"><Type size={16} /> 1. Lyric Mode & Quick Syntax</h3>
+                <p className={`${theme.subtleText} mb-3`}>Select <strong>LYRIC MODE</strong> to type naturally and space out syllables. You can also paste lyrics directly into the box with inline chords right next to the words using brackets! The app will automatically separate the chord and snap it tightly above the right syllable.</p>
+
+                <div className={`p-3 rounded-lg border ${theme.borderLight} ${isDayMode ? 'bg-[#e8e8e2]' : 'bg-[#1f1f1f]'} font-mono text-xs overflow-x-auto`}>
+                  <p className="font-bold mb-1 opacity-70">Example Input Format:</p>
+                  <p className={theme.chordText}>[C]Jin-gle <span className={theme.text}>bells</span> [Am]jin-gle <span className={theme.text}>bells...</span></p>
+                </div>
+              </div>
+
+              <div className={`p-4 rounded-xl border ${theme.borderLight} ${isDayMode ? 'bg-gray-50' : 'bg-[#2a2a2a]'}`}>
+                <h3 className="font-bold text-lg mb-2 flex items-center gap-2"><Music size={16} /> 2. Chord Mode & Editing</h3>
+                <p className={theme.subtleText}>Switch to <strong>CHORD MODE</strong> to sequence progressions quickly. Type a chord name (e.g., C, Am) and hit <code>Spacebar</code> to generate an empty gap block designated for that chord. You can also click on any chord to open the <strong>Chord Pad</strong> for quick, precise modifications (e.g. maj7, sus4).</p>
+              </div>
+
+              <div className={`p-4 rounded-xl border ${theme.borderLight} ${isDayMode ? 'bg-gray-50' : 'bg-[#2a2a2a]'}`}>
+                <h3 className="font-bold text-lg mb-2 flex items-center gap-2"><GripVertical size={16} /> 3. Visual Timeline Grid</h3>
+                <p className={theme.subtleText}>Everything snaps to a fluid 32-slot visual grid. <strong>Drag and drop</strong> individual parts to rearrange your song structure. You can drag chords left or right to re-align them precisely with specific lyric beats, pushing other chords over fluidly if needed.</p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowManual(false)}
+              className={`w-full py-4 rounded-xl font-bold tracking-widest text-sm ${isDayMode ? 'bg-[#1a1a1a] text-[#f5f5f0] hover:bg-[#333]' : 'bg-[#e0d036] text-[#1a1a1a] hover:bg-[#c9b800]'} transition-colors duration-300 shadow-lg`}
+            >
+              GOT IT, LET'S COMPOSE!
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- Quick Note Modal --- */}
+      {showNoteModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className={`${theme.modalCard} p-6 rounded-xl shadow-2xl border ${theme.border} max-w-lg w-full mx-4 flex flex-col relative`}>
+            <button
+              onClick={() => setShowNoteModal(false)}
+              className={`absolute top-4 right-4 p-2 rounded-full ${isDayMode ? 'hover:bg-gray-200' : 'hover:bg-gray-700'} transition-colors`}
+            >
+              <X size={20} className={theme.subtleText} />
+            </button>
+
+            <div className={`flex items-center gap-3 mb-4 ${theme.accentText}`}>
+              <FileText size={24} />
+              <h3 className="text-xl font-bold">Quick Note</h3>
+            </div>
+            <p className={`text-sm mb-4 ${theme.subtleText}`}>Add plain text notes or ideas specifically for <strong>{activeSongName}</strong>.</p>
+
+            <textarea
+              value={notes[activeSongId] || ''}
+              onChange={(e) => setNotes(prev => ({ ...prev, [activeSongId]: e.target.value }))}
+              className={`w-full h-48 p-4 rounded-xl border ${theme.border} ${isDayMode ? 'bg-[#f9f9f9]' : 'bg-[#1f1f1f]'} text-sm ${theme.text} resize-none focus:outline-none focus:ring-2 focus:ring-opacity-50 ${isDayMode ? 'focus:ring-[#c9b800]' : 'focus:ring-[#e0d036]'}`}
+              placeholder="Type your notes here..."
+            />
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setShowNoteModal(false)}
+                className={`px-6 py-2 rounded-xl font-bold tracking-widest text-sm ${isDayMode ? 'bg-[#1a1a1a] text-[#f5f5f0] hover:bg-[#333]' : 'bg-[#e0d036] text-[#1a1a1a] hover:bg-[#c9b800]'} transition-colors duration-300 shadow-lg`}
+              >
+                SAVE & CLOSE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
