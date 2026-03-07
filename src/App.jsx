@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon, X, HelpCircle, FileText, Loader2, Cloud, CloudOff } from 'lucide-react';
+import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon, X, HelpCircle, FileText, Loader2, Cloud, CloudOff, Menu } from 'lucide-react';
 import { auth, db, googleProvider } from './firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { get, ref, set } from 'firebase/database';
@@ -126,6 +126,7 @@ const App = () => {
   const [authChecking, setAuthChecking] = useState(true);
   const [isGuestMode, setIsGuestMode] = useState(false);
   const [showManual, setShowManual] = useState(true);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const dataLoadedRef = useRef(false);
 
   const [notes, setNotes] = useState({});
@@ -726,10 +727,10 @@ const App = () => {
 
   if (!user && !isGuestMode) {
     return (
-      <div className={`flex h-screen w-full items-center justify-between ${isDayMode ? 'bg-[#f5f5f0]' : 'bg-[#1a1a1a]'} font-sans overflow-hidden transition-colors duration-300 relative px-12 md:px-24 py-12`}>
+      <div className={`flex h-[100dvh] w-full flex-col md:flex-row items-center md:items-stretch justify-between ${isDayMode ? 'bg-[#f5f5f0]' : 'bg-[#1a1a1a]'} font-sans overflow-y-auto md:overflow-hidden transition-colors duration-300 relative px-6 md:px-24 py-8 md:py-12 gap-8 md:gap-0`}>
 
         {/* Left Column (Information - 60%) */}
-        <div className="flex flex-col h-full justify-between w-[60%] z-10 pr-10">
+        <div className="flex flex-col h-auto md:h-full justify-between w-full md:w-[60%] z-10 md:pr-10">
 
           {/* Brand Identity */}
           <div className={`flex items-center gap-2 font-bold text-2xl tracking-tight ${theme.accentText}`}>
@@ -739,8 +740,8 @@ const App = () => {
 
           {/* Hero Text & Body Content */}
           <div className="flex flex-col gap-6 justify-center flex-1 max-w-xl">
-            <h1 className={`text-6xl font-extrabold tracking-tight ${theme.text}`}>Creative.</h1>
-            <h2 className={`text-2xl font-semibold ${theme.subtleText}`}>Write, arrange, and synchronize your music seamlessly.</h2>
+            <h1 className={`text-4xl md:text-6xl font-extrabold tracking-tight ${theme.text}`}>Creative.</h1>
+            <h2 className={`text-xl md:text-2xl font-semibold ${theme.subtleText}`}>Write, arrange, and synchronize your music seamlessly.</h2>
             <p className={`text-base leading-relaxed mt-4 ${theme.subtleText}`}>
               ChordScribe empowers musicians to instantly document lyric ideas and intuitively drag-and-drop chord progressions over them. Whether you are drafting a quick chorus or mapping out an entire EP, your work automatically syncs to the cloud securely, accessible anywhere, beautifully formatted in both day and night themes, and ready for your next jam session.
             </p>
@@ -767,9 +768,9 @@ const App = () => {
         </div>
 
         {/* Right Column (Interaction - 40%) */}
-        <div className="w-[40%] h-full flex items-center justify-end z-10 pl-10 max-w-md">
+        <div className="w-full md:w-[40%] h-auto md:h-full flex items-center justify-center md:justify-end z-10 md:pl-10 max-w-md">
           {/* Card Container */}
-          <div className={`w-full p-10 rounded-[2rem] shadow-2xl border ${theme.borderLight} ${isDayMode ? 'bg-white' : 'bg-[#2b2b2b]'} flex flex-col items-center text-center transform transition-all duration-500`}>
+          <div className={`w-full p-8 md:p-10 rounded-[2rem] shadow-2xl border ${theme.borderLight} ${isDayMode ? 'bg-white' : 'bg-[#2b2b2b]'} flex flex-col items-center text-center transform transition-all duration-500`}>
 
             {/* Header */}
             <h3 className={`text-sm font-bold tracking-widest mb-6 ${theme.subtleText}`}>MEMBER LOGIN</h3>
@@ -806,11 +807,16 @@ const App = () => {
   }
 
   return (
-    <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
+    <div className={`flex h-[100dvh] w-full flex-col md:flex-row ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
 
       {/* --- Left Navigation (30%) - Hidden in Guest Mode --- */}
       {!isGuestMode && (
-        <div className={`w-[30%] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg z-20`}>
+        <>
+          <div
+            className={`fixed inset-0 z-30 bg-black/40 transition-opacity md:hidden ${mobileSidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+            onClick={() => setMobileSidebarOpen(false)}
+          ></div>
+          <div className={`${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 z-40 h-[100dvh] w-[85%] max-w-[340px] md:translate-x-0 md:static md:z-20 md:h-auto md:w-[30%] md:min-w-[280px] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg transition-transform duration-300`}>
           <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
             <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
             <div className="flex items-center gap-2">
@@ -847,7 +853,10 @@ const App = () => {
                   {folder.songs.map(song => (
                     <div
                       key={song.id}
-                      onClick={() => setActiveSongId(song.id)}
+                      onClick={() => {
+                        setActiveSongId(song.id);
+                        setMobileSidebarOpen(false);
+                      }}
                       className={`group flex items-center justify-between p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
                     >
                       <div className="flex items-center gap-2 truncate flex-1 min-w-0">
@@ -895,16 +904,26 @@ const App = () => {
               </button>
             </div>
           </div>
-        </div>
+          </div>
+        </>
       )}
 
       {/* --- Right Content (70% or Full Width Centered in Guest Mode) --- */}
-      <div className={`flex flex-col relative z-10 ${isGuestMode ? 'w-full max-w-4xl mx-auto border-x ' + theme.borderLight : 'w-[70%]'}`}>
+      <div className={`flex flex-col relative z-10 flex-1 min-h-0 ${isGuestMode ? 'w-full max-w-4xl mx-auto md:border-x ' + theme.borderLight : 'w-full md:w-[70%]'}`}>
 
         {/* Header */}
-        <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.header} flex justify-between items-center z-10`}>
-          <div className="flex items-center gap-4">
-            <h2 className="text-3xl font-bold tracking-wide">{activeSongName}</h2>
+        <div className={`px-4 md:px-8 py-4 md:py-6 border-b ${theme.borderLight} ${theme.header} flex flex-col sm:flex-row justify-between sm:items-center gap-3 z-10`}>
+          <div className="flex items-center gap-3 md:gap-4 min-w-0">
+            {!isGuestMode && (
+              <button
+                onClick={() => setMobileSidebarOpen(true)}
+                className={`md:hidden p-2 rounded ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors`}
+                title="Open Library"
+              >
+                <Menu size={18} />
+              </button>
+            )}
+            <h2 className="text-xl md:text-3xl font-bold tracking-wide truncate">{activeSongName}</h2>
             {!isGuestMode && user && (
               <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full transition-all duration-300 ${syncStatus === 'saving' ? (isDayMode ? 'bg-[#c9b800]/20 text-[#7a6e00]' : 'bg-[#e0d036]/20 text-[#e0d036]') : syncStatus === 'error' ? 'bg-red-500/20 text-red-500' : (isDayMode ? 'bg-green-500/20 text-green-700' : 'bg-green-500/20 text-green-400')}`}>
                 {syncStatus === 'saving' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -946,7 +965,7 @@ const App = () => {
         </div>
 
         {/* --- Token Input Area (Staging Area) --- */}
-        <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.stagingBg} shrink-0 z-20 shadow-sm relative`}>
+        <div className={`px-4 md:px-8 py-4 md:py-6 border-b ${theme.borderLight} ${theme.stagingBg} shrink-0 z-20 shadow-sm relative`}>
           <div className={`w-full flex flex-col gap-2 ${theme.stagingCard} p-3 rounded-xl border ${theme.stagingBorder} shadow-inner`}>
 
             {/* Top bar with Toggle */}
@@ -1123,7 +1142,7 @@ const App = () => {
                   onKeyDown={handleInputKeyDown}
                   onPaste={handlePaste}
                   placeholder={stagedWords.length === 0 ? (isChordMode ? "Type chords (e.g. C Am F) and press Space..." : "Paste lyrics or type space to separate... ('x' for gap)") : ""}
-                  className={`bg-transparent text-sm font-mono ${theme.subtleText} outline-none flex-1 min-w-[250px] ml-2 py-1 placeholder-[#999]`}
+                  className={`bg-transparent text-sm font-mono ${theme.subtleText} outline-none flex-1 min-w-[140px] md:min-w-[250px] ml-2 py-1 placeholder-[#999]`}
                 />
               </div>
 
@@ -1145,7 +1164,7 @@ const App = () => {
         </div>
 
         {/* --- Sections Area (Groups with Dot Grid) --- */}
-        <div className="flex-1 overflow-y-auto p-6 relative">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 relative">
           {activeGroups.length === 0 ? (
             <div className={`text-center mt-20 flex flex-col items-center ${theme.subtleText}`}>
               <Music size={48} className="mb-4 opacity-20" />
@@ -1181,7 +1200,7 @@ const App = () => {
                   </div>
 
                   {/* Droppable Area for Sections */}
-                  <div className="flex-1 p-4 space-y-3 relative z-10">
+                  <div className="flex-1 p-4 space-y-4 md:space-y-3 relative z-10">
                     {(Array.isArray(group.sections) ? group.sections : []).map((section) => {
                       // เช็คว่า section นี้เป็นคอร์ดเพียวๆ หรือไม่ (คำทั้งหมดเป็น 'x')
                       const isChordOnlySection = section.lyrics && section.lyrics.length > 0 && section.lyrics.every(l => l.isX);
@@ -1208,8 +1227,8 @@ const App = () => {
                             <Trash2 size={14} />
                           </button>
 
-                          <div className={`flex-1 overflow-hidden relative ${isChordOnlySection ? 'py-1 px-3' : 'p-3 pt-4'}`}>
-                            <div className={`grid grid-cols-[repeat(32,minmax(0,1fr))] relative group/grid ${isChordOnlySection ? '' : 'mb-1'}`}>
+                          <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
+                            <div className={`grid grid-cols-[repeat(32,minmax(0,1fr))] min-w-[760px] md:min-w-[680px] lg:min-w-0 relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
                               {Array.from({ length: 32 }).map((_, i) => {
                                 const sectionChords = Array.isArray(section.chords) ? section.chords : [];
                                 const sectionLyrics = Array.isArray(section.lyrics) ? section.lyrics : [];
@@ -1224,7 +1243,7 @@ const App = () => {
                                     onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
                                   >
                                     {/* Chords */}
-                                    <div className="h-7 w-full relative z-20 flex items-center">
+                                    <div className="h-8 w-full relative z-20 flex items-center">
                                       {chordsHere.map(chord => (
                                         <div
                                           key={chord.id}
@@ -1251,11 +1270,11 @@ const App = () => {
 
                                     {/* Lyrics */}
                                     {!isChordOnlySection && (
-                                      <div className="h-7 w-full relative z-10 flex items-center">
+                                      <div className="h-8 w-full relative z-10 flex items-center">
                                         {lyricsHere.map(lyric => (
                                           <span
                                             key={lyric.id}
-                                            className={`absolute left-0 text-base font-medium tracking-wide pl-1 font-mono ${theme.lyricText} whitespace-nowrap pointer-events-none`}
+                                            className={`absolute left-0 text-base font-medium tracking-wide leading-tight pl-1 font-mono ${theme.lyricText} whitespace-nowrap pointer-events-none`}
                                           >
                                             {/* If it's the 'x' token, render nothing but it still consumes space! */}
                                             {lyric.isX ? '' : lyric.text}
