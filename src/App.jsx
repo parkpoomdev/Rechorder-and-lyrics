@@ -128,6 +128,7 @@ const App = () => {
   const [isGuestMode, setIsGuestMode] = useState(false);
   const [showManual, setShowManual] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const dataLoadedRef = useRef(false);
 
   const [notes, setNotes] = useState({});
@@ -336,6 +337,7 @@ const App = () => {
 
   const handleLogout = async () => {
     try {
+      setShowAuthModal(false);
       // Force an immediate save before logging out to ensure no data is lost
       if (user && dataLoadedRef.current) {
         setSyncStatus('saving');
@@ -351,6 +353,12 @@ const App = () => {
     } catch (e) {
       console.error("Error during logout:", e);
     }
+  };
+
+  const openAuthModal = () => setShowAuthModal(true);
+  const continueAsGuest = () => {
+    setIsGuestMode(true);
+    setShowAuthModal(false);
   };
 
   // --- Theme Colors ---
@@ -774,6 +782,45 @@ const App = () => {
 
   const activeGroups = Array.isArray(songData[activeSongId]) ? songData[activeSongId] : [];
 
+  const authModal = showAuthModal && !user && (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className={`${theme.modalCard} relative w-full max-w-md rounded-3xl border p-6 shadow-2xl md:p-8 ${theme.borderLight}`}>
+        <button
+          onClick={() => setShowAuthModal(false)}
+          className={`absolute right-4 top-4 rounded-full p-2 transition-colors ${isDayMode ? 'hover:bg-gray-200' : 'hover:bg-gray-700'}`}
+          title="Close"
+        >
+          <X size={18} className={theme.subtleText} />
+        </button>
+
+        <h3 className={`text-xs font-bold tracking-[0.2em] ${theme.subtleText}`}>SIGN IN</h3>
+        <p className={`mt-3 text-sm leading-relaxed ${theme.subtleText}`}>
+          Sign in with Google to save your folders, songs, chords, and notes automatically.
+        </p>
+
+        <button
+          onClick={handleLogin}
+          className="mt-6 flex w-full items-center justify-center gap-3 rounded-xl bg-[#4285F4] px-4 py-3.5 text-[13px] font-bold tracking-wide text-white transition-all duration-300 hover:bg-[#3367D6] hover:shadow-lg"
+        >
+          <svg className="h-5 w-5 rounded-full bg-white p-0.5" viewBox="0 0 24 24">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+          </svg>
+          LOGIN WITH GOOGLE
+        </button>
+
+        <button
+          onClick={continueAsGuest}
+          className={`mt-3 w-full rounded-xl border px-4 py-3 text-[12px] font-bold tracking-wider transition ${theme.borderLight} ${theme.card} ${isDayMode ? 'hover:bg-[#f0f0ea]' : 'hover:bg-[#333333]'}`}
+        >
+          CONTINUE AS GUEST
+        </button>
+      </div>
+    </div>
+  );
+
   if (authChecking) {
     return (
       <div className={`flex h-screen w-full items-center justify-center ${theme.bg} ${theme.text} transition-colors duration-300`}>
@@ -791,8 +838,8 @@ const App = () => {
         <div className={`pointer-events-none absolute -right-20 top-[-120px] h-[360px] w-[360px] rounded-full blur-3xl ${isDayMode ? 'bg-[#c9b800]/15' : 'bg-[#e0d036]/10'}`}></div>
         <div className={`pointer-events-none absolute -left-32 bottom-[-180px] h-[360px] w-[360px] rounded-full blur-3xl ${isDayMode ? 'bg-[#7a6e00]/10' : 'bg-[#ffffff]/5'}`}></div>
 
-        <div className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 md:flex-row md:items-center md:gap-10 md:px-10 md:py-10">
-          <div className="flex w-full flex-col gap-5 md:w-[58%] md:gap-8">
+        <div className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-5xl flex-col justify-center gap-6 px-4 py-6 sm:px-6 md:gap-8 md:px-10 md:py-10">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 md:gap-8">
             <div className="flex items-center justify-between">
               <div className={`flex items-center gap-2 font-bold tracking-tight ${theme.accentText}`}>
                 <Music size={24} className="md:h-7 md:w-7" />
@@ -828,31 +875,16 @@ const App = () => {
                 <p className="mt-1 text-sm font-semibold">Continue on any device</p>
               </div>
             </div>
-          </div>
-
-          <div className="w-full md:w-[42%] md:max-w-md">
-            <div className={`rounded-3xl border p-6 shadow-2xl md:p-8 ${theme.borderLight} ${isDayMode ? 'bg-white' : 'bg-[#2b2b2b]'}`}>
-              <h3 className={`text-xs font-bold tracking-[0.2em] ${theme.subtleText}`}>SIGN IN</h3>
-              <p className={`mt-3 text-sm leading-relaxed ${theme.subtleText}`}>
-                Sign in with Google to save your folders, songs, chords, and notes automatically.
-              </p>
-
+            <div className="flex flex-col gap-3 sm:flex-row">
               <button
-                onClick={handleLogin}
-                className="mt-6 flex w-full items-center justify-center gap-3 rounded-xl bg-[#4285F4] px-4 py-3.5 text-[13px] font-bold tracking-wide text-white transition-all duration-300 hover:bg-[#3367D6] hover:shadow-lg"
+                onClick={openAuthModal}
+                className="w-full rounded-xl bg-[#4285F4] px-4 py-3 text-[12px] font-bold tracking-wider text-white transition hover:bg-[#3367D6]"
               >
-                <svg className="h-5 w-5 rounded-full bg-white p-0.5" viewBox="0 0 24 24">
-                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-                </svg>
-                LOGIN WITH GOOGLE
+                SIGN IN WITH GOOGLE
               </button>
-
               <button
-                onClick={() => setIsGuestMode(true)}
-                className={`mt-3 w-full rounded-xl border px-4 py-3 text-[12px] font-bold tracking-wider transition ${theme.borderLight} ${theme.card} ${isDayMode ? 'hover:bg-[#f0f0ea]' : 'hover:bg-[#333333]'}`}
+                onClick={continueAsGuest}
+                className={`w-full rounded-xl border px-4 py-3 text-[12px] font-bold tracking-wider transition ${theme.borderLight} ${theme.card} ${isDayMode ? 'hover:bg-[#f0f0ea]' : 'hover:bg-[#333333]'}`}
               >
                 CONTINUE AS GUEST
               </button>
@@ -861,14 +893,17 @@ const App = () => {
         </div>
 
         <div className={`relative z-10 pb-4 text-center text-[11px] tracking-wider opacity-60 md:pb-6 md:text-xs ${theme.subtleText}`}>
-          Parkpoo Wisedsri with AI prompt coding
+          Developed by Parkpoom Wisedsri.
         </div>
+
+        {authModal}
       </div>
     );
   }
 
   return (
     <div className={`flex h-[100dvh] w-full flex-col md:flex-row ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
+      <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col md:flex-row">
 
       {/* --- Left Navigation (30%) - Hidden in Guest Mode --- */}
       {!isGuestMode && (
@@ -877,7 +912,7 @@ const App = () => {
             className={`fixed inset-0 z-30 bg-black/40 transition-opacity md:hidden ${mobileSidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
             onClick={() => setMobileSidebarOpen(false)}
           ></div>
-          <div className={`${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 z-40 h-[100dvh] w-[85%] max-w-[340px] md:translate-x-0 md:static md:z-20 md:h-auto md:w-[30%] md:min-w-[280px] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg transition-transform duration-300`}>
+          <div className={`${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 z-40 h-[100dvh] w-[85%] max-w-[340px] md:translate-x-0 md:static md:z-20 md:h-auto md:w-[320px] md:min-w-[300px] md:max-w-[360px] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg transition-transform duration-300`}>
           <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
             <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
             <div className="flex items-center gap-2">
@@ -970,7 +1005,7 @@ const App = () => {
       )}
 
       {/* --- Right Content (70% or Full Width Centered in Guest Mode) --- */}
-      <div className={`flex flex-col relative z-10 flex-1 min-h-0 ${isGuestMode ? 'w-full max-w-4xl mx-auto md:border-x ' + theme.borderLight : 'w-full md:w-[70%]'}`}>
+      <div className={`flex flex-col relative z-10 flex-1 min-h-0 ${isGuestMode ? 'w-full max-w-4xl mx-auto md:border-x ' + theme.borderLight : 'w-full md:flex-1 md:min-w-0'}`}>
 
         {/* Header */}
         <div className={`px-4 md:px-8 py-4 md:py-6 border-b ${theme.borderLight} ${theme.header} flex flex-col sm:flex-row justify-between sm:items-center gap-3 z-10`}>
@@ -1006,10 +1041,10 @@ const App = () => {
                   <HelpCircle size={20} />
                 </button>
                 <button
-                  onClick={() => setIsGuestMode(false)}
+                  onClick={openAuthModal}
                   className={`px-5 py-2.5 text-sm font-bold uppercase tracking-widest rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors shadow-md`}
                 >
-                  Sign Up to Save
+                  Sign In to Save
                 </button>
               </>
             )}
@@ -1370,8 +1405,11 @@ const App = () => {
         </div>
 
       </div>
+      </div>
 
       {/* --- MODALS MOVED TO ROOT TO FIX Z-INDEX OVERLAP --- */}
+      {authModal}
+
       {/* --- Custom Confirm Modal --- */}
       {deleteConfirm.isOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
