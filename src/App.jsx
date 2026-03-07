@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon } from 'lucide-react';
+import { auth, db, googleProvider } from './firebase';
+import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const App = () => {
+  // --- Firebase Auth State ---
+  const [user, setUser] = useState(null);
+  const dataLoadedRef = useRef(false);
+
   // --- State Management ---
   const [folders, setFolders] = useState([
     {
@@ -11,7 +18,7 @@ const App = () => {
     }
   ]);
   const [activeSongId, setActiveSongId] = useState(1);
-  
+
   // Data Structure is now grouped by Song Parts (Intro, Verse, etc.)
   const [songData, setSongData] = useState({
     1: [
@@ -44,21 +51,69 @@ const App = () => {
       }
     ]
   });
-  
+
   // --- Input Staging State (Tag Editor) ---
   const [stagedWords, setStagedWords] = useState([]); // { id, word, chord }
   const [inputValue, setInputValue] = useState('');
   const [editingChordId, setEditingChordId] = useState(null);
   const [chordInputValue, setChordInputValue] = useState('');
-  
+
   // New State for Toggle Mode
   const [isChordMode, setIsChordMode] = useState(false);
-  
+
   // Modal state for deletion
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, groupId: null });
 
   // Day / Night theme
   const [isDayMode, setIsDayMode] = useState(false);
+
+  // --- Firebase Sync ---
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (userAuth) => {
+      setUser(userAuth);
+      if (userAuth) {
+        const docRef = doc(db, 'users', userAuth.uid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.folders) setFolders(data.folders);
+          if (data.songData) setSongData(data.songData);
+        }
+        dataLoadedRef.current = true;
+      } else {
+        dataLoadedRef.current = false;
+      }
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!user || !dataLoadedRef.current) return;
+    const timeoutId = setTimeout(() => {
+      setDoc(doc(db, 'users', user.uid), {
+        folders,
+        songData
+      }, { merge: true }).catch(err => console.error("Error saving to Firebase:", err));
+    }, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [folders, songData, user]);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      dataLoadedRef.current = false;
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // --- Theme Colors ---
   const theme = isDayMode ? {
@@ -144,7 +199,7 @@ const App = () => {
     e.preventDefault();
     const paste = e.clipboardData.getData('text');
     const words = paste.trim().split(/\s+/);
-    
+
     const newWords = words.map((w, i) => {
       if (isChordMode) {
         // In Chord Mode, everything pasted becomes a chord on an empty gap
@@ -154,8 +209,8 @@ const App = () => {
         let chord = null;
         const matchEnd = w.match(/^(.*?)\[(.*?)\]$/);
         const matchStart = w.match(/^\[(.*?)\](.*)$/);
-        
-        if (matchEnd) { word = matchEnd[1]; chord = matchEnd[2]; } 
+
+        if (matchEnd) { word = matchEnd[1]; chord = matchEnd[2]; }
         else if (matchStart) { chord = matchStart[1]; word = matchStart[2]; }
 
         return { id: Date.now() + i.toString(), word, chord };
@@ -201,7 +256,7 @@ const App = () => {
 
       // X takes 2 slots as a gap, normal words calculate size
       let slotsNeeded = isX ? 2 : Math.ceil(w.word.length / 2.5);
-      currentPos += slotsNeeded + 1; 
+      currentPos += slotsNeeded + 1;
       if (currentPos > 31) currentPos = 31;
     });
 
@@ -316,7 +371,7 @@ const App = () => {
         if (!sectionToMove) return prev;
         return { ...prev, [activeSongId]: tempGroups.map(g => g.id === targetGroupId ? { ...g, sections: [...g.sections, sectionToMove] } : g) };
       });
-    } catch (err) {}
+    } catch (err) { }
   };
 
   const handleSectionDrop = (e, targetGroupId, targetSectionId) => {
@@ -349,7 +404,7 @@ const App = () => {
           })
         };
       });
-    } catch (err) {}
+    } catch (err) { }
   };
 
   const handleChordDrop = (e, targetGroupId, targetSectionId, targetPos) => {
@@ -373,7 +428,7 @@ const App = () => {
           })
         } : g)
       }));
-    } catch (err) {}
+    } catch (err) { }
   };
 
   const removeSection = (groupId, sectionId) => {
@@ -398,6 +453,37 @@ const App = () => {
     }
   };
 
+  const renameSong = (e, folderId, songId, currentTitle) => {
+    e.stopPropagation();
+    const newTitle = prompt("Enter new song title:", currentTitle);
+    if (newTitle && newTitle.trim() !== "") {
+      setFolders(folders.map(f => f.id === folderId ? {
+        ...f,
+        songs: f.songs.map(s => s.id === songId ? { ...s, title: newTitle.trim() } : s)
+      } : f));
+    }
+  };
+
+  const deleteSong = (e, folderId, songId) => {
+    e.stopPropagation();
+    if (window.confirm("Are you sure you want to delete this song?")) {
+      setFolders(folders.map(f => f.id === folderId ? {
+        ...f,
+        songs: f.songs.filter(s => s.id !== songId)
+      } : f));
+
+      setSongData(prev => {
+        const newData = { ...prev };
+        delete newData[songId];
+        return newData;
+      });
+
+      if (activeSongId === songId) {
+        setActiveSongId(null);
+      }
+    }
+  };
+
   let activeSongName = "No Song Selected";
   folders.forEach(f => {
     const song = f.songs.find(s => s.id === activeSongId);
@@ -408,7 +494,7 @@ const App = () => {
 
   return (
     <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
-      
+
       {/* --- Left Navigation (30%) --- */}
       <div className={`w-[30%] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg z-20`}>
         <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
@@ -426,7 +512,7 @@ const App = () => {
             </button>
           </div>
         </div>
-        
+
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {folders.map(folder => (
             <div key={folder.id} className="mb-4">
@@ -438,24 +524,67 @@ const App = () => {
               </div>
               <div className="space-y-1">
                 {folder.songs.map(song => (
-                  <div 
+                  <div
                     key={song.id}
                     onClick={() => setActiveSongId(song.id)}
-                    className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
+                    className={`group flex items-center justify-between p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
                   >
-                    <Music size={16} />
-                    <span className="text-sm truncate">{song.title}</span>
+                    <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                      <Music size={16} className="shrink-0" />
+                      <span className="text-sm truncate">{song.title}</span>
+                    </div>
+                    <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1 shrink-0 bg-inherit pl-2">
+                      <button
+                        onClick={(e) => renameSong(e, folder.id, song.id, song.title)}
+                        className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-[#e0d036] transition`}
+                        title="Rename Song"
+                      >
+                        <Edit3 size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => deleteSong(e, folder.id, song.id)}
+                        className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-red-500 transition`}
+                        title="Delete Song"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           ))}
         </div>
+
+        {/* --- Profile / Login --- */}
+        <div className={`p-4 border-t ${theme.borderLight}`}>
+          {user ? (
+            <div className={`flex items-center justify-between`}>
+              <div className="flex items-center gap-2 overflow-hidden mr-2">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="avatar" className="w-8 h-8 rounded-full" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-[#e0d036] flex items-center justify-center text-black font-bold text-sm shrink-0">
+                    {user.email?.[0]?.toUpperCase()}
+                  </div>
+                )}
+                <div className="truncate text-sm font-medium" title={user.email}>{user.displayName || user.email}</div>
+              </div>
+              <button onClick={handleLogout} className={`px-2 py-1 text-xs rounded border ${theme.borderLight} hover:bg-red-500/20 hover:text-red-500 transition`}>
+                Logout
+              </button>
+            </div>
+          ) : (
+            <button onClick={handleLogin} className={`w-full py-2 bg-[#4285F4] text-white rounded-md hover:bg-[#3367D6] font-medium transition text-sm flex items-center justify-center gap-2`}>
+              Login with Google
+            </button>
+          )}
+        </div>
       </div>
 
       {/* --- Right Content (70%) --- */}
       <div className="w-[70%] flex flex-col relative z-10">
-        
+
         {/* Header */}
         <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.header}`}>
           <h2 className="text-3xl font-bold tracking-wide">{activeSongName}</h2>
@@ -464,16 +593,15 @@ const App = () => {
         {/* --- Token Input Area (Staging Area) --- */}
         <div className={`px-8 py-6 border-b ${theme.borderLight} ${theme.stagingBg} shrink-0 z-20 shadow-sm relative`}>
           <div className={`w-full flex flex-col gap-2 ${theme.stagingCard} p-3 rounded-xl border ${theme.stagingBorder} shadow-inner`}>
-            
+
             {/* Top bar with Toggle */}
             <div className="flex items-center gap-3 px-1">
               <button
                 onClick={() => setIsChordMode(!isChordMode)}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all ${
-                  isChordMode
-                    ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
-                    : isDayMode ? 'bg-[#dcdcd6] text-gray-700 hover:bg-[#cccccc]' : 'bg-[#444] text-gray-300 hover:bg-[#555]'
-                }`}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all ${isChordMode
+                  ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
+                  : isDayMode ? 'bg-[#dcdcd6] text-gray-700 hover:bg-[#cccccc]' : 'bg-[#444] text-gray-300 hover:bg-[#555]'
+                  }`}
               >
                 {isChordMode ? <Music size={12} strokeWidth={3} /> : <Type size={12} />}
                 {isChordMode ? 'CHORD MODE' : 'LYRIC MODE'}
@@ -484,7 +612,7 @@ const App = () => {
             </div>
 
             <div className="flex items-start gap-3">
-              <div 
+              <div
                 className={`flex-1 flex flex-wrap items-center ${theme.stagingInput} p-2 rounded-lg border ${theme.stagingBorder} min-h-[56px] cursor-text`}
                 onClick={() => document.getElementById('main-word-input')?.focus()}
               >
@@ -502,16 +630,68 @@ const App = () => {
                       )}
 
                       {editingChordId === sw.id ? (
-                        <div className={`flex items-center ${theme.chordText} font-bold text-sm`}>
+                        <div className={`flex items-center ${theme.chordText} font-bold text-sm relative z-50`}>
                           [<input
                             autoFocus
                             value={chordInputValue}
                             onChange={e => setChordInputValue(e.target.value)}
                             onBlur={() => saveChord(sw.id)}
                             onKeyDown={e => e.key === 'Enter' && saveChord(sw.id)}
-                            className={`bg-transparent outline-none w-6 text-center ${theme.chordText} placeholder-[#888]`}
+                            className={`bg-transparent outline-none min-w-[30px] w-auto text-center ${theme.chordText} placeholder-[#888]`}
                             placeholder="C"
+                            size={chordInputValue.length || 1}
                           />]
+
+                          {/* Hover/Click Pad for Chords */}
+                          <div className={`absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-3 rounded-xl shadow-2xl border ${isDayMode ? 'bg-white border-gray-300' : 'bg-[#2a2a2a] border-[#555]'} flex flex-col gap-2 cursor-default animate-in fade-in zoom-in-95 duration-100 z-50`}>
+                            <div className="flex justify-between items-center mb-1">
+                              <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.subtleText}`}>Chord Pad</span>
+                              <div className="flex gap-2">
+                                <button
+                                  onMouseDown={(e) => { e.preventDefault(); setChordInputValue(''); }}
+                                  onClick={(e) => { e.stopPropagation(); saveChord(sw.id); }}
+                                  className="text-xs text-red-500 hover:text-red-400 font-bold px-1"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-4 gap-1.5">
+                              {['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'].map(root => (
+                                <button
+                                  key={root}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={(e) => { e.stopPropagation(); setChordInputValue(root); }}
+                                  className={`py-1.5 text-xs font-bold rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-black hover:bg-[#e0d036] hover:border-[#e0d036]' : 'border-[#444] bg-[#333] text-white hover:bg-[#e0d036] hover:text-black'} transition-colors`}
+                                >
+                                  {root}
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-1.5 mt-1 border-t border-dashed border-gray-300 dark:border-[#444] pt-2">
+                              {['m', 'maj', '7', 'm7', 'maj7', 'sus2', 'sus4', 'dim', 'aug'].map(ext => (
+                                <button
+                                  key={ext}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    let current = chordInputValue;
+                                    const match = current.match(/^[A-G][b#]?/i);
+                                    if (match) {
+                                      setChordInputValue(match[0].toUpperCase() + ext);
+                                    } else {
+                                      setChordInputValue(current + ext);
+                                    }
+                                  }}
+                                  className={`py-1 text-[11px] font-medium rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-200' : 'border-[#444] bg-[#333] text-gray-300 hover:bg-[#444]'} transition-colors`}
+                                >
+                                  {ext}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       ) : sw.chord ? (
                         <span
@@ -547,11 +727,10 @@ const App = () => {
               <button
                 onClick={submitSection}
                 disabled={stagedWords.length === 0 && !inputValue.trim()}
-                className={`p-3 rounded-lg flex items-center justify-center transition-all h-[56px] w-[56px] ${
-                  stagedWords.length > 0 || inputValue.trim()
-                    ? 'bg-[#e0d036] text-black hover:bg-yellow-400 shadow-[0_0_15px_rgba(224,208,54,0.3)]' 
-                    : 'bg-[#444] text-gray-500 cursor-not-allowed'
-                }`}
+                className={`p-3 rounded-lg flex items-center justify-center transition-all h-[56px] w-[56px] ${stagedWords.length > 0 || inputValue.trim()
+                  ? 'bg-[#e0d036] text-black hover:bg-yellow-400 shadow-[0_0_15px_rgba(224,208,54,0.3)]'
+                  : 'bg-[#444] text-gray-500 cursor-not-allowed'
+                  }`}
               >
                 <Check size={24} strokeWidth={3} />
               </button>
@@ -569,8 +748,8 @@ const App = () => {
           ) : (
             <div className="space-y-6 pb-32">
               {activeGroups.map((group) => (
-                <div 
-                  key={group.id} 
+                <div
+                  key={group.id}
                   className={`group/container border-2 border-dashed ${theme.groupBorder} hover:border-opacity-70 rounded-xl transition-colors min-h-[140px] flex flex-col overflow-hidden`}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => handleGroupDrop(e, group.id)}
@@ -587,8 +766,8 @@ const App = () => {
                       placeholder="Part Name"
                     />
                     <div className={`flex-1 border-t border-dashed ${theme.border}`}></div>
-                    <button 
-                      onClick={() => requestRemoveGroup(group.id)} 
+                    <button
+                      onClick={() => requestRemoveGroup(group.id)}
                       className={`${theme.subtleText} hover:text-red-500 transition-colors opacity-0 group-hover/container:opacity-100`}
                     >
                       <Trash2 size={16} />
@@ -600,94 +779,95 @@ const App = () => {
                     {group.sections.map((section) => {
                       // เช็คว่า section นี้เป็นคอร์ดเพียวๆ หรือไม่ (คำทั้งหมดเป็น 'x')
                       const isChordOnlySection = section.lyrics && section.lyrics.length > 0 && section.lyrics.every(l => l.isX);
-                      
+
                       return (
-                      <div 
-                        key={section.id} 
-                        draggable
-                        onDragStart={(e) => handleDragStartSection(e, group.id, section.id)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => handleSectionDrop(e, group.id, section.id)}
-                        className={`${theme.card} rounded-md shadow-md overflow-hidden border-l-4 border-[#e0d036] relative group transition-all flex`}
-                      >
-                        {/* Drag Handle */}
-                        <div className={`w-6 ${theme.dragHandle} flex items-center justify-center ${theme.subtleText} cursor-grab active:cursor-grabbing border-r ${theme.borderLight}`}>
-                           <GripVertical size={14} />
-                        </div>
-
-                        {/* Section Delete Button */}
-                        <button 
-                          onClick={() => removeSection(group.id, section.id)}
-                          className={`absolute right-2 p-1.5 bg-red-500/10 text-red-400 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition z-30 ${isChordOnlySection ? 'top-1/2 -translate-y-1/2' : 'top-2'}`}
+                        <div
+                          key={section.id}
+                          draggable
+                          onDragStart={(e) => handleDragStartSection(e, group.id, section.id)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => handleSectionDrop(e, group.id, section.id)}
+                          className={`${theme.card} rounded-md shadow-md overflow-hidden border-l-4 border-[#e0d036] relative group transition-all flex`}
                         >
-                          <Trash2 size={14} />
-                        </button>
+                          {/* Drag Handle */}
+                          <div className={`w-6 ${theme.dragHandle} flex items-center justify-center ${theme.subtleText} cursor-grab active:cursor-grabbing border-r ${theme.borderLight}`}>
+                            <GripVertical size={14} />
+                          </div>
 
-                        <div className={`flex-1 overflow-hidden relative ${isChordOnlySection ? 'py-1 px-3' : 'p-3 pt-4'}`}>
-                          <div className={`grid grid-cols-[repeat(32,minmax(0,1fr))] relative group/grid ${isChordOnlySection ? '' : 'mb-1'}`}>
-                            {Array.from({ length: 32 }).map((_, i) => {
-                              const chordsHere = section.chords.filter(c => c.pos === i);
-                              const lyricsHere = section.lyrics ? section.lyrics.filter(l => l.pos === i) : [];
-                              
-                              return (
-                                <div
-                                  key={i}
-                                  className="border-l border-white/5 flex flex-col items-start justify-start relative hover:bg-white/10 transition-colors"
-                                  onDragOver={(e) => e.preventDefault()}
-                                  onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
-                                >
-                                  {/* Chords */}
-                                  <div className="h-7 w-full relative z-20 flex items-center">
-                                    {chordsHere.map(chord => (
-                                      <div
-                                        key={chord.id}
-                                        draggable
-                                        onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
-                                        className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30`}
-                                      >
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
-                                          className="absolute -left-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform -translate-x-1 group-hover/chord:translate-x-0"
-                                        >
-                                          <ChevronLeft size={10} />
-                                        </button>
-                                        {chord.text}
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
-                                          className="absolute -right-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform translate-x-1 group-hover/chord:translate-x-0"
-                                        >
-                                          <ChevronRight size={10} />
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
+                          {/* Section Delete Button */}
+                          <button
+                            onClick={() => removeSection(group.id, section.id)}
+                            className={`absolute right-2 p-1.5 bg-red-500/10 text-red-400 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition z-30 ${isChordOnlySection ? 'top-1/2 -translate-y-1/2' : 'top-2'}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
 
-                                  {/* Lyrics */}
-                                  {!isChordOnlySection && (
-                                    <div className="h-7 w-full relative z-10 flex items-center">
-                                      {lyricsHere.map(lyric => (
-                                        <span 
-                                          key={lyric.id} 
-                                          className={`absolute left-0 text-base font-medium tracking-wide pl-1 font-mono ${theme.lyricText} whitespace-nowrap pointer-events-none`}
+                          <div className={`flex-1 overflow-hidden relative ${isChordOnlySection ? 'py-1 px-3' : 'p-3 pt-4'}`}>
+                            <div className={`grid grid-cols-[repeat(32,minmax(0,1fr))] relative group/grid ${isChordOnlySection ? '' : 'mb-1'}`}>
+                              {Array.from({ length: 32 }).map((_, i) => {
+                                const chordsHere = section.chords.filter(c => c.pos === i);
+                                const lyricsHere = section.lyrics ? section.lyrics.filter(l => l.pos === i) : [];
+
+                                return (
+                                  <div
+                                    key={i}
+                                    className="border-l border-white/5 flex flex-col items-start justify-start relative hover:bg-white/10 transition-colors"
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
+                                  >
+                                    {/* Chords */}
+                                    <div className="h-7 w-full relative z-20 flex items-center">
+                                      {chordsHere.map(chord => (
+                                        <div
+                                          key={chord.id}
+                                          draggable
+                                          onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
+                                          className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30`}
                                         >
-                                          {/* If it's the 'x' token, render nothing but it still consumes space! */}
-                                          {lyric.isX ? '' : lyric.text}
-                                        </span>
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
+                                            className="absolute -left-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform -translate-x-1 group-hover/chord:translate-x-0"
+                                          >
+                                            <ChevronLeft size={10} />
+                                          </button>
+                                          {chord.text}
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
+                                            className="absolute -right-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform translate-x-1 group-hover/chord:translate-x-0"
+                                          >
+                                            <ChevronRight size={10} />
+                                          </button>
+                                        </div>
                                       ))}
                                     </div>
-                                  )}
-                                  
-                                </div>
-                              );
-                            })}
+
+                                    {/* Lyrics */}
+                                    {!isChordOnlySection && (
+                                      <div className="h-7 w-full relative z-10 flex items-center">
+                                        {lyricsHere.map(lyric => (
+                                          <span
+                                            key={lyric.id}
+                                            className={`absolute left-0 text-base font-medium tracking-wide pl-1 font-mono ${theme.lyricText} whitespace-nowrap pointer-events-none`}
+                                          >
+                                            {/* If it's the 'x' token, render nothing but it still consumes space! */}
+                                            {lyric.isX ? '' : lyric.text}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )})}
+                      )
+                    })}
                   </div>
                 </div>
               ))}
-              
+
               {/* --- Add Group (+) Button --- */}
               <button
                 onClick={addGroup}
