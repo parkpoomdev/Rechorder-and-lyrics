@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon, X, HelpCircle, FileText, Loader2, Cloud, CloudOff, Menu } from 'lucide-react';
+import { FolderPlus, Music, Plus, ChevronLeft, ChevronRight, Trash2, Edit3, Check, GripVertical, Type, Sun, Moon, X, HelpCircle, FileText, Loader2, Cloud, CloudOff, Menu, Eye } from 'lucide-react';
 import { auth, db, googleProvider } from './firebase';
 import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } from 'firebase/auth';
 import { get, ref, set } from 'firebase/database';
@@ -119,6 +119,65 @@ const toValidChord = (rawValue) => {
   const normalized = normalizeChordInput(rawValue);
   if (!normalized) return null;
   return CHORD_PATTERN.test(normalized) ? normalized : null;
+};
+
+const processInputWord = (val, isChordMode, baseId = Date.now()) => {
+  if (isChordMode) {
+    const validChord = toValidChord(val);
+    if (!validChord) return { error: true };
+    return { item: { id: baseId.toString(), word: 'x', chord: validChord } };
+  }
+  return { item: { id: baseId.toString(), word: val, chord: null } };
+};
+
+const parsePastedText = (pasteText, isChordMode, baseId = Date.now()) => {
+  const words = pasteText.trim().split(/\s+/);
+  return words.reduce((acc, w, i) => {
+    if (isChordMode) {
+      const validChord = toValidChord(w);
+      if (validChord) {
+        acc.push({ id: `${baseId}-${i}`, word: 'x', chord: validChord });
+      }
+    } else {
+      let word = w;
+      let chord = null;
+      const matchEnd = w.match(/^(.*?)\[(.*?)\]$/);
+      const matchStart = w.match(/^\[(.*?)\](.*)$/);
+
+      if (matchEnd) {
+        word = matchEnd[1];
+        chord = toValidChord(matchEnd[2]);
+      } else if (matchStart) {
+        chord = toValidChord(matchStart[1]);
+        word = matchStart[2];
+      }
+      acc.push({ id: `${baseId}-${i}`, word, chord });
+    }
+    return acc;
+  }, []);
+};
+
+const processFinalWordsToSectionItems = (finalWords, baseId = Date.now()) => {
+  let newLyrics = [];
+  let newChords = [];
+  let currentPos = 0;
+
+  finalWords.forEach((w, i) => {
+    const isX = w.word.toLowerCase() === 'x';
+    newLyrics.push({ id: `l-${baseId}-${i}`, text: w.word, pos: currentPos, isX });
+
+    if (w.chord) {
+      let chordPos = currentPos;
+      while (newChords.some(existing => existing.pos === chordPos) && chordPos < 31) chordPos++;
+      newChords.push({ id: `c-${baseId}-${i}`, text: w.chord, pos: chordPos });
+    }
+
+    let slotsNeeded = isX ? 2 : 1;
+    currentPos += slotsNeeded;
+    if (currentPos > 31) currentPos = 31;
+  });
+
+  return { lyrics: newLyrics, chords: newChords };
 };
 
 const App = () => {
@@ -428,70 +487,40 @@ const App = () => {
     if (e.key === ' ') {
       e.preventDefault();
       if (inputValue.trim()) {
-        const val = inputValue.trim();
-        if (isChordMode) {
-          const validChord = toValidChord(val);
-          if (!validChord) {
-            setIsChordSyntaxError(true);
-            return;
-          }
-          // If in Chord Mode, treat input as a gap ('x') and set the text as its chord
-          setStagedWords([...stagedWords, { id: Date.now().toString(), word: 'x', chord: validChord }]);
-          setIsChordSyntaxError(false);
-        } else {
-          setStagedWords([...stagedWords, { id: Date.now().toString(), word: val, chord: null }]);
+        const result = processInputWord(inputValue.trim(), isChordMode);
+        if (result.error) {
+          setIsChordSyntaxError(true);
+          return;
         }
+        setStagedWords(prev => [...prev, result.item]);
+        setIsChordSyntaxError(false);
         setInputValue('');
       }
     } else if (e.key === 'Enter') {
       e.preventDefault();
       submitSection();
     } else if (e.key === 'Backspace' && inputValue === '') {
-      if (stagedWords.length > 0) {
-        const lastWord = stagedWords[stagedWords.length - 1];
-        // If it was a chord-only block, put the chord back into input
+      setStagedWords(prev => {
+        if (prev.length === 0) return prev;
+        const newStaged = [...prev];
+        const lastWord = newStaged.pop();
         setInputValue(isChordMode && lastWord.chord ? lastWord.chord : lastWord.word);
-        setStagedWords(stagedWords.slice(0, -1));
-      }
+        return newStaged;
+      });
     }
   };
 
   const handlePaste = (e) => {
     e.preventDefault();
     const paste = e.clipboardData.getData('text');
-    const words = paste.trim().split(/\s+/);
-
-    const newWords = words.map((w, i) => {
-      if (isChordMode) {
-        const validChord = toValidChord(w);
-        if (!validChord) return null;
-        // In Chord Mode, everything pasted becomes a chord on an empty gap
-        return { id: Date.now() + i.toString(), word: 'x', chord: validChord };
-      } else {
-        let word = w;
-        let chord = null;
-        const matchEnd = w.match(/^(.*?)\[(.*?)\]$/);
-        const matchStart = w.match(/^\[(.*?)\](.*)$/);
-
-        if (matchEnd) {
-          word = matchEnd[1];
-          chord = toValidChord(matchEnd[2]);
-        } else if (matchStart) {
-          chord = toValidChord(matchStart[1]);
-          word = matchStart[2];
-        }
-
-        return { id: Date.now() + i.toString(), word, chord };
-      }
-    }).filter(Boolean);
-
-    setStagedWords([...stagedWords, ...newWords]);
+    const newWords = parsePastedText(paste, isChordMode);
+    setStagedWords(prev => [...prev, ...newWords]);
   };
 
   const saveChord = (id) => {
     const val = chordInputValue.trim();
     if (val === '') {
-      setStagedWords(stagedWords.map(w => w.id === id ? { ...w, chord: null } : w));
+      setStagedWords(prev => prev.map(w => w.id === id ? { ...w, chord: null } : w));
       setEditingChordId(null);
       return;
     }
@@ -502,65 +531,38 @@ const App = () => {
       return;
     }
 
-    setStagedWords(stagedWords.map(w => w.id === id ? { ...w, chord: validChord } : w));
+    setStagedWords(prev => prev.map(w => w.id === id ? { ...w, chord: validChord } : w));
     setEditingChordId(null);
   };
 
   const submitSection = () => {
     let finalWords = [...stagedWords];
     if (inputValue.trim()) {
-      const val = inputValue.trim();
-      if (isChordMode) {
-        const validChord = toValidChord(val);
-        if (!validChord) {
-          setIsChordSyntaxError(true);
-          return;
-        }
-        finalWords.push({ id: Date.now().toString(), word: 'x', chord: validChord });
-        setIsChordSyntaxError(false);
-      } else {
-        finalWords.push({ id: Date.now().toString(), word: val, chord: null });
+      const result = processInputWord(inputValue.trim(), isChordMode);
+      if (result.error) {
+        setIsChordSyntaxError(true);
+        return;
       }
+      finalWords.push(result.item);
+      setIsChordSyntaxError(false);
     }
 
     if (finalWords.length === 0) return;
 
-    let newLyrics = [];
-    let newChords = [];
-    let currentPos = 0;
-
-    finalWords.forEach((w, i) => {
-      const isX = w.word.toLowerCase() === 'x'; // Detect 'x' or 'X'
-
-      newLyrics.push({ id: `l-${Date.now()}-${i}`, text: w.word, pos: currentPos, isX });
-
-      if (w.chord) {
-        let chordPos = currentPos;
-        while (newChords.some(existing => existing.pos === chordPos) && chordPos < 31) chordPos++;
-        newChords.push({ id: `c-${Date.now()}-${i}`, text: w.chord, pos: chordPos });
-      }
-
-      // X takes 2 slots as a gap, normal words calculate size
-      let slotsNeeded = isX ? 2 : Math.ceil(w.word.length / 2.5);
-      currentPos += slotsNeeded + 1;
-      if (currentPos > 31) currentPos = 31;
-    });
-
-    const newSection = { id: 'sec-' + Date.now(), lyrics: newLyrics, chords: newChords };
+    const { lyrics, chords } = processFinalWordsToSectionItems(finalWords);
+    const newSection = { id: 'sec-' + Date.now(), lyrics, chords };
 
     setSongData(prev => {
       const currentGroups = prev[activeSongId] || [];
-      // If no groups, create default Verse 1
       if (currentGroups.length === 0) {
         return { ...prev, [activeSongId]: [{ id: 'g-' + Date.now(), title: 'Verse 1', sections: [newSection] }] };
       }
-      // Always append to the LAST group by default
-      const newGroups = currentGroups.map((g, idx) =>
-        idx === currentGroups.length - 1
-          ? { ...g, sections: [...g.sections, newSection] }
-          : g
-      );
-      return { ...prev, [activeSongId]: newGroups };
+      return {
+        ...prev,
+        [activeSongId]: currentGroups.map((g, idx) =>
+          idx === currentGroups.length - 1 ? { ...g, sections: [...g.sections, newSection] } : g
+        )
+      };
     });
 
     setStagedWords([]);
@@ -905,506 +907,565 @@ const App = () => {
     <div className={`flex h-[100dvh] w-full flex-col md:flex-row ${theme.bg} ${theme.text} font-sans overflow-hidden transition-colors duration-300`}>
       <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col md:flex-row">
 
-      {/* --- Left Navigation (30%) - Hidden in Guest Mode --- */}
-      {!isGuestMode && (
-        <>
-          <div
-            className={`fixed inset-0 z-30 bg-black/40 transition-opacity md:hidden ${mobileSidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
-            onClick={() => setMobileSidebarOpen(false)}
-          ></div>
-          <div className={`${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 z-40 h-[100dvh] w-[85%] max-w-[340px] md:translate-x-0 md:static md:z-20 md:h-auto md:w-[320px] md:min-w-[300px] md:max-w-[360px] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg transition-transform duration-300`}>
-          <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
-            <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowManual(true)}
-                className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
-                title="How to Use"
-              >
-                <HelpCircle size={18} />
-              </button>
-              <button
-                onClick={() => setIsDayMode(!isDayMode)}
-                className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
-                title={isDayMode ? 'Switch to Night' : 'Switch to Day'}
-              >
-                {isDayMode ? <Moon size={18} /> : <Sun size={18} />}
-              </button>
-              <button onClick={addFolder} className={`p-1 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`} title="Add Folder">
-                <FolderPlus size={20} />
-              </button>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {folders.map(folder => (
-              <div key={folder.id} className="mb-4">
-                <div className={`flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText}`}>
-                  <span>{folder.name}</span>
-                  <button onClick={() => addSong(folder.id)} className={`transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`}>
-                    <Plus size={16} />
+        {/* --- Left Navigation (30%) - Hidden in Guest Mode --- */}
+        {!isGuestMode && (
+          <>
+            <div
+              className={`fixed inset-0 z-30 bg-black/40 transition-opacity md:hidden ${mobileSidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+              onClick={() => setMobileSidebarOpen(false)}
+            ></div>
+            <div className={`${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed left-0 top-0 z-40 h-[100dvh] w-[85%] max-w-[340px] md:translate-x-0 md:static md:z-20 md:h-auto md:w-[320px] md:min-w-[300px] md:max-w-[360px] ${theme.sidebar} flex flex-col border-r ${theme.border} shadow-lg transition-transform duration-300`}>
+              <div className={`p-5 flex justify-between items-center ${theme.sidebarBorder}`}>
+                <h1 className={`text-xl font-bold tracking-tight ${theme.accentText}`}>ChordScribe</h1>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowManual(true)}
+                    className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
+                    title="How to Use"
+                  >
+                    <HelpCircle size={18} />
+                  </button>
+                  <button
+                    onClick={() => setIsDayMode(!isDayMode)}
+                    className={`p-1.5 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`}
+                    title={isDayMode ? 'Switch to Night' : 'Switch to Day'}
+                  >
+                    {isDayMode ? <Moon size={18} /> : <Sun size={18} />}
+                  </button>
+                  <button onClick={addFolder} className={`p-1 rounded transition ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'}`} title="Add Folder">
+                    <FolderPlus size={20} />
                   </button>
                 </div>
-                <div className="space-y-1">
-                  {folder.songs.map(song => (
-                    <div
-                      key={song.id}
-                      onClick={() => {
-                        setActiveSongId(song.id);
-                        setMobileSidebarOpen(false);
-                      }}
-                      className={`group flex items-center justify-between p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
-                    >
-                      <div className="flex items-center gap-2 truncate flex-1 min-w-0">
-                        <Music size={16} className="shrink-0" />
-                        <span className="text-sm truncate">{song.title}</span>
-                      </div>
-                      <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1 shrink-0 bg-inherit pl-2">
-                        <button
-                          onClick={(e) => renameSong(e, folder.id, song.id, song.title)}
-                          className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-[#e0d036] transition`}
-                          title="Rename Song"
-                        >
-                          <Edit3 size={14} />
-                        </button>
-                        <button
-                          onClick={(e) => deleteSong(e, folder.id, song.id)}
-                          className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-red-500 transition`}
-                          title="Delete Song"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {folders.map(folder => (
+                  <div key={folder.id} className="mb-4">
+                    <div className={`flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText}`}>
+                      <span>{folder.name}</span>
+                      <button onClick={() => addSong(folder.id)} className={`transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`}>
+                        <Plus size={16} />
+                      </button>
                     </div>
-                  ))}
+                    <div className="space-y-1">
+                      {folder.songs.map(song => (
+                        <div
+                          key={song.id}
+                          onClick={() => {
+                            setActiveSongId(song.id);
+                            setMobileSidebarOpen(false);
+                          }}
+                          className={`group flex items-center justify-between p-2 rounded cursor-pointer transition ${activeSongId === song.id ? theme.sidebarActive : theme.sidebarHover}`}
+                        >
+                          <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                            <Music size={16} className="shrink-0" />
+                            <span className="text-sm truncate">{song.title}</span>
+                          </div>
+                          <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1 shrink-0 bg-inherit pl-2">
+                            <button
+                              onClick={(e) => renameSong(e, folder.id, song.id, song.title)}
+                              className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-[#e0d036] transition`}
+                              title="Rename Song"
+                            >
+                              <Edit3 size={14} />
+                            </button>
+                            <button
+                              onClick={(e) => deleteSong(e, folder.id, song.id)}
+                              className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-red-500 transition`}
+                              title="Delete Song"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* --- Profile --- */}
+              <div className={`p-4 border-t ${theme.borderLight}`}>
+                <div className={`flex items-center justify-between`}>
+                  <div className="flex items-center gap-2 overflow-hidden mr-2">
+                    {user?.photoURL ? (
+                      <img src={user.photoURL} alt="avatar" className="w-8 h-8 rounded-full shadow-sm" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-[#e0d036] flex items-center justify-center text-black font-bold text-sm shrink-0 shadow-sm">
+                        {user?.email?.[0]?.toUpperCase()}
+                      </div>
+                    )}
+                    <div className="truncate text-sm font-medium" title={user?.email}>{user?.displayName || user?.email}</div>
+                  </div>
+                  <button onClick={handleLogout} className={`px-2 py-1.5 text-xs font-semibold rounded border ${theme.borderLight} hover:bg-red-500 hover:text-white hover:border-red-500 transition-colors`}>
+                    Logout
+                  </button>
                 </div>
               </div>
-            ))}
-          </div>
-
-          {/* --- Profile --- */}
-          <div className={`p-4 border-t ${theme.borderLight}`}>
-            <div className={`flex items-center justify-between`}>
-              <div className="flex items-center gap-2 overflow-hidden mr-2">
-                {user?.photoURL ? (
-                  <img src={user.photoURL} alt="avatar" className="w-8 h-8 rounded-full shadow-sm" />
-                ) : (
-                  <div className="w-8 h-8 rounded-full bg-[#e0d036] flex items-center justify-center text-black font-bold text-sm shrink-0 shadow-sm">
-                    {user?.email?.[0]?.toUpperCase()}
-                  </div>
-                )}
-                <div className="truncate text-sm font-medium" title={user?.email}>{user?.displayName || user?.email}</div>
-              </div>
-              <button onClick={handleLogout} className={`px-2 py-1.5 text-xs font-semibold rounded border ${theme.borderLight} hover:bg-red-500 hover:text-white hover:border-red-500 transition-colors`}>
-                Logout
-              </button>
             </div>
-          </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
 
-      {/* --- Right Content (70% or Full Width Centered in Guest Mode) --- */}
-      <div className={`flex flex-col relative z-10 flex-1 min-h-0 ${isGuestMode ? 'w-full max-w-4xl mx-auto md:border-x ' + theme.borderLight : 'w-full md:flex-1 md:min-w-0'}`}>
+        {/* --- Right Content (70% or Full Width Centered in Guest Mode) --- */}
+        <div className={`flex flex-col relative z-10 flex-1 min-h-0 ${isGuestMode ? 'w-full max-w-4xl mx-auto md:border-x ' + theme.borderLight : 'w-full md:flex-1 md:min-w-0'}`}>
 
-        {/* Header */}
-        <div className={`px-4 md:px-8 py-4 md:py-6 border-b ${theme.borderLight} ${theme.header} flex flex-col sm:flex-row justify-between sm:items-center gap-3 z-10`}>
-          <div className="flex items-center gap-3 md:gap-4 min-w-0">
-            {!isGuestMode && (
-              <button
-                onClick={() => setMobileSidebarOpen(true)}
-                className={`md:hidden p-2 rounded ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors`}
-                title="Open Library"
-              >
-                <Menu size={18} />
-              </button>
-            )}
-            <h2 className="text-xl md:text-3xl font-bold tracking-wide truncate">{activeSongName}</h2>
-            {!isGuestMode && user && (
-              <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full transition-all duration-300 ${syncStatus === 'saving' ? (isDayMode ? 'bg-[#c9b800]/20 text-[#7a6e00]' : 'bg-[#e0d036]/20 text-[#e0d036]') : syncStatus === 'error' ? 'bg-red-500/20 text-red-500' : (isDayMode ? 'bg-green-500/20 text-green-700' : 'bg-green-500/20 text-green-400')}`}>
-                {syncStatus === 'saving' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {syncStatus === 'saved' && <Cloud className="w-3.5 h-3.5" />}
-                {syncStatus === 'error' && <CloudOff className="w-3.5 h-3.5" />}
-                {syncStatus === 'saving' ? 'Saving...' : syncStatus === 'saved' ? 'Saved to Cloud' : 'Sync Error'}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3">
-            {isGuestMode && (
-              <>
+          {/* Header */}
+          <div className={`px-4 md:px-8 py-4 md:py-6 border-b ${theme.borderLight} ${theme.header} flex flex-col sm:flex-row justify-between sm:items-center gap-3 z-10`}>
+            <div className="flex items-center gap-3 md:gap-4 min-w-0">
+              {!isGuestMode && (
                 <button
-                  onClick={() => setShowManual(true)}
+                  onClick={() => setMobileSidebarOpen(true)}
+                  className={`md:hidden p-2 rounded ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors`}
+                  title="Open Library"
+                >
+                  <Menu size={18} />
+                </button>
+              )}
+              <h2 className="text-xl md:text-3xl font-bold tracking-wide truncate">{activeSongName}</h2>
+              {!isGuestMode && user && (
+                <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full transition-all duration-300 ${syncStatus === 'saving' ? (isDayMode ? 'bg-[#c9b800]/20 text-[#7a6e00]' : 'bg-[#e0d036]/20 text-[#e0d036]') : syncStatus === 'error' ? 'bg-red-500/20 text-red-500' : (isDayMode ? 'bg-green-500/20 text-green-700' : 'bg-green-500/20 text-green-400')}`}>
+                  {syncStatus === 'saving' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {syncStatus === 'saved' && <Cloud className="w-3.5 h-3.5" />}
+                  {syncStatus === 'error' && <CloudOff className="w-3.5 h-3.5" />}
+                  {syncStatus === 'saving' ? 'Saving...' : syncStatus === 'saved' ? 'Saved to Cloud' : 'Sync Error'}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              {isGuestMode && (
+                <>
+                  <button
+                    onClick={() => setShowManual(true)}
+                    className={`p-2 rounded-full ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors shadow-sm`}
+                    title="How to Use"
+                  >
+                    <HelpCircle size={20} />
+                  </button>
+                  <button
+                    onClick={openAuthModal}
+                    className={`px-5 py-2.5 text-sm font-bold uppercase tracking-widest rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors shadow-md`}
+                  >
+                    Sign In to Save
+                  </button>
+                </>
+              )}
+              {!isGuestMode && user && (
+                <button
+                  onClick={() => setShowNoteModal(true)}
                   className={`p-2 rounded-full ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors shadow-sm`}
-                  title="How to Use"
+                  title="Quick Note"
                 >
-                  <HelpCircle size={20} />
+                  <FileText size={20} />
                 </button>
-                <button
-                  onClick={openAuthModal}
-                  className={`px-5 py-2.5 text-sm font-bold uppercase tracking-widest rounded-full bg-[#4285F4] text-white hover:bg-[#3367D6] transition-colors shadow-md`}
-                >
-                  Sign In to Save
-                </button>
-              </>
-            )}
-            {!isGuestMode && user && (
-              <button
-                onClick={() => setShowNoteModal(true)}
-                className={`p-2 rounded-full ${isDayMode ? 'bg-[#dcdcd6] hover:bg-[#cccccc] text-gray-700' : 'bg-[#444] hover:bg-[#555] text-gray-300'} transition-colors shadow-sm`}
-                title="Quick Note"
-              >
-                <FileText size={20} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* --- Token Input Area (Staging Area) --- */}
-        <div className={`px-4 md:px-8 py-4 md:py-6 border-b ${theme.borderLight} ${theme.stagingBg} shrink-0 z-20 shadow-sm relative`}>
-          <div className={`w-full flex flex-col gap-2 ${theme.stagingCard} p-3 rounded-xl border ${theme.stagingBorder} shadow-inner`}>
-
-            {/* Top bar with Toggle */}
-            <div className="flex items-center gap-3 px-1">
-              <div className={`inline-flex items-center rounded-full p-1 border ${theme.stagingBorder} ${isDayMode ? 'bg-[#efefe8]' : 'bg-[#222]'}`}>
-                <button
-                  onClick={() => { setIsChordMode(false); setIsChordSyntaxError(false); }}
-                  className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${!isChordMode
-                    ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
-                    : isDayMode ? 'text-gray-700 hover:bg-[#d8d8d0]' : 'text-gray-300 hover:bg-[#444]'
-                    }`}
-                >
-                  <Type size={12} /> LYRIC
-                </button>
-                <button
-                  onClick={() => { setIsChordMode(true); setIsChordSyntaxError(false); }}
-                  className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${isChordMode
-                    ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
-                    : isDayMode ? 'text-gray-700 hover:bg-[#d8d8d0]' : 'text-gray-300 hover:bg-[#444]'
-                    }`}
-                >
-                  <Music size={12} strokeWidth={3} /> CHORD
-                </button>
-              </div>
-              <span className={`text-xs font-mono flex items-center gap-1 ${theme.subtleText}`}>
-                <Edit3 size={12} /> Staging Area
-              </span>
+              )}
             </div>
+          </div>
 
-            <div className="flex items-start gap-3">
-              <div
-                className={`flex-1 flex flex-wrap items-center ${theme.stagingInput} p-2 rounded-lg border ${theme.stagingBorder} min-h-[56px] cursor-text`}
-                onClick={(e) => {
-                  if (e.target.closest('[data-stop-main-focus="true"]')) return;
-                  document.getElementById('main-word-input')?.focus();
-                }}
-              >
-                {stagedWords.map((sw) => {
-                  const isX = sw.word.toLowerCase() === 'x';
-                  const isChordOnly = isX && sw.chord; // If it's a gap and has a chord, it's considered a "Chord Block"
+          {/* --- Staging Area & Live Preview --- */}
+          <div className={`p-4 md:p-6 pb-2 ${theme.stagingBg} border-b ${theme.border} relative z-40 transition-colors shadow-inner flex-shrink-0`}>
+            <div className={`mx-auto w-full max-w-5xl rounded-xl shadow-sm ${theme.stagingCard} border ${theme.stagingBorder} overflow-visible relative z-50 transition-all duration-300`}>
 
-                  return (
-                    <div key={sw.id} className={`relative flex items-center ${isDayMode ? 'bg-[#e8e8e2] hover:bg-[#dcdcd6] border-[#cccccc]' : 'bg-[#333] hover:bg-[#3a3a3a] border-[#555]'} border rounded-md px-2 py-1 m-1 group transition-colors`}>
-                      {/* Only show the word/gap text if it's NOT a chord-only block */}
-                      {!isChordOnly && (
-                        <span className={`text-sm font-mono mr-1 cursor-default ${isX ? `${theme.subtleText} italic` : theme.text}`}>
-                          {isX ? '(gap)' : sw.word}
-                        </span>
-                      )}
+              {/* Top bar with Toggle */}
+              <div className="flex items-center gap-3 px-1">
+                <div className={`inline-flex items-center rounded-full p-1 border ${theme.stagingBorder} ${isDayMode ? 'bg-[#efefe8]' : 'bg-[#222]'}`}>
+                  <button
+                    onClick={() => { setIsChordMode(false); setIsChordSyntaxError(false); }}
+                    className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${!isChordMode
+                      ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
+                      : isDayMode ? 'text-gray-700 hover:bg-[#d8d8d0]' : 'text-gray-300 hover:bg-[#444]'
+                      }`}
+                  >
+                    <Type size={12} /> LYRIC
+                  </button>
+                  <button
+                    onClick={() => { setIsChordMode(true); setIsChordSyntaxError(false); }}
+                    className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${isChordMode
+                      ? 'bg-[#e0d036] text-black shadow-[0_0_10px_rgba(224,208,54,0.3)]'
+                      : isDayMode ? 'text-gray-700 hover:bg-[#d8d8d0]' : 'text-gray-300 hover:bg-[#444]'
+                      }`}
+                  >
+                    <Music size={12} strokeWidth={3} /> CHORD
+                  </button>
+                </div>
+                <span className={`text-xs font-mono flex items-center gap-1 ${theme.subtleText}`}>
+                  <Edit3 size={12} /> Staging Area
+                </span>
+              </div>
 
-                      {editingChordId === sw.id ? (
-                        <div
-                          data-stop-main-focus="true"
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                          className={`flex items-center ${theme.chordText} font-bold text-sm relative z-50`}
-                        >
-                          [<input
-                            autoFocus
-                            value={chordInputValue}
-                            onChange={e => setChordInputValue(normalizeChordInput(e.target.value))}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') saveChord(sw.id);
-                              if (e.key === 'Escape') setEditingChordId(null);
-                            }}
-                            className={`bg-transparent outline-none min-w-[30px] w-auto text-center ${theme.chordText} placeholder-[#888]`}
-                            placeholder="C"
-                            size={chordInputValue.length || 1}
-                          />]
+              <div className="flex items-start gap-3 relative z-50">
+                <div
+                  className={`flex-1 flex flex-wrap items-center ${theme.stagingInput} p-2 rounded-lg border ${theme.stagingBorder} min-h-[56px] cursor-text relative z-50`}
+                  onClick={(e) => {
+                    if (e.target.closest('[data-stop-main-focus="true"]')) return;
+                    document.getElementById('main-word-input')?.focus();
+                  }}
+                >
+                  {stagedWords.map((sw) => {
+                    const isX = sw.word.toLowerCase() === 'x';
+                    const isChordOnly = isX && sw.chord; // If it's a gap and has a chord, it's considered a "Chord Block"
 
-                          {/* Hover/Click Pad for Chords */}
-                          <div className={`absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-3 rounded-xl shadow-2xl border ${isDayMode ? 'bg-white border-gray-300' : 'bg-[#2a2a2a] border-[#555]'} flex flex-col gap-2 cursor-default animate-in fade-in zoom-in-95 duration-100 z-50`}>
-                            <div className="flex justify-between items-center mb-1">
-                              <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.subtleText}`}>Chord Pad</span>
-                              <div className="flex gap-2">
+                    return (
+                      <div key={sw.id} className={`relative flex items-center ${isDayMode ? 'bg-[#e8e8e2] hover:bg-[#dcdcd6] border-[#cccccc]' : 'bg-[#333] hover:bg-[#3a3a3a] border-[#555]'} border rounded-md px-2 py-1 m-1 group transition-colors`}>
+                        {/* Only show the word/gap text if it's NOT a chord-only block */}
+                        {!isChordOnly && (
+                          <span className={`text-sm font-mono mr-1 cursor-default ${isX ? `${theme.subtleText} italic` : theme.text}`}>
+                            {isX ? '(gap)' : sw.word}
+                          </span>
+                        )}
+
+                        {editingChordId === sw.id ? (
+                          <div
+                            data-stop-main-focus="true"
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            className={`flex items-center ${theme.chordText} font-bold text-sm relative z-50`}
+                          >
+                            [<input
+                              autoFocus
+                              value={chordInputValue}
+                              onChange={e => setChordInputValue(normalizeChordInput(e.target.value))}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveChord(sw.id);
+                                if (e.key === 'Escape') setEditingChordId(null);
+                              }}
+                              className={`bg-transparent outline-none min-w-[30px] w-auto text-center ${theme.chordText} placeholder-[#888]`}
+                              placeholder="C"
+                              size={chordInputValue.length || 1}
+                            />]
+
+                            {/* Hover/Click Pad for Chords */}
+                            <div className={`absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-3 rounded-xl shadow-2xl border ${isDayMode ? 'bg-white border-gray-300' : 'bg-[#2a2a2a] border-[#555]'} flex flex-col gap-2 cursor-default animate-in fade-in zoom-in-95 duration-100 z-[9999]`}>
+                              <div className="flex justify-between items-center mb-1">
+                                <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.subtleText}`}>Chord Pad</span>
+                                <div className="flex gap-2">
+                                  <button
+                                    onMouseDown={(e) => { e.preventDefault(); setChordInputValue(''); }}
+                                    onClick={(e) => { e.stopPropagation(); saveChord(sw.id); }}
+                                    className="text-xs text-red-500 hover:text-red-400 font-bold px-1"
+                                  >
+                                    Clear
+                                  </button>
+                                </div>
+                              </div>
+
+                              <input
+                                value={chordInputValue}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onChange={(e) => setChordInputValue(normalizeChordInput(e.target.value))}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') saveChord(sw.id);
+                                }}
+                                placeholder="Type root chord (e.g. F#, Bb, Cmaj7)"
+                                className={`w-full px-2 py-1.5 text-xs rounded border ${isDayMode ? 'border-gray-300 bg-white text-black' : 'border-[#555] bg-[#1f1f1f] text-white'} outline-none`}
+                              />
+
+                              <div className="grid grid-cols-4 gap-1.5">
+                                {['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'].map(root => (
+                                  <button
+                                    key={root}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={(e) => { e.stopPropagation(); setChordInputValue(root); }}
+                                    className={`py-1.5 text-xs font-bold rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-black hover:bg-[#e0d036] hover:border-[#e0d036]' : 'border-[#444] bg-[#333] text-white hover:bg-[#e0d036] hover:text-black'} transition-colors`}
+                                  >
+                                    {root}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-1.5 mt-1 border-t border-dashed border-gray-300 dark:border-[#444] pt-2">
+                                {['m', 'maj', '7', 'm7', 'maj7', 'sus2', 'sus4', 'dim', 'aug'].map(ext => (
+                                  <button
+                                    key={ext}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      let current = chordInputValue;
+                                      const match = current.match(/^[A-G][b#]?/i);
+                                      if (match) {
+                                        setChordInputValue(normalizeChordInput(match[0].toUpperCase() + ext));
+                                      } else {
+                                        setChordInputValue(normalizeChordInput(current + ext));
+                                      }
+                                    }}
+                                    className={`py-1 text-[11px] font-medium rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-200' : 'border-[#444] bg-[#333] text-gray-300 hover:bg-[#444]'} transition-colors`}
+                                  >
+                                    {ext}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <div className="flex justify-end gap-2 pt-1">
                                 <button
-                                  onMouseDown={(e) => { e.preventDefault(); setChordInputValue(''); }}
-                                  onClick={(e) => { e.stopPropagation(); saveChord(sw.id); }}
-                                  className="text-xs text-red-500 hover:text-red-400 font-bold px-1"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={(e) => { e.stopPropagation(); setEditingChordId(null); }}
+                                  className={`px-2 py-1 text-[11px] rounded border ${isDayMode ? 'border-gray-300 text-gray-700 hover:bg-gray-100' : 'border-[#555] text-gray-300 hover:bg-[#333]'}`}
                                 >
-                                  Clear
+                                  Cancel
+                                </button>
+                                <button
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={(e) => { e.stopPropagation(); saveChord(sw.id); }}
+                                  className="px-2 py-1 text-[11px] rounded bg-[#e0d036] text-black font-bold hover:bg-yellow-400"
+                                >
+                                  Apply
                                 </button>
                               </div>
                             </div>
-
-                            <input
-                              value={chordInputValue}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onChange={(e) => setChordInputValue(normalizeChordInput(e.target.value))}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveChord(sw.id);
-                              }}
-                              placeholder="Type root chord (e.g. F#, Bb, Cmaj7)"
-                              className={`w-full px-2 py-1.5 text-xs rounded border ${isDayMode ? 'border-gray-300 bg-white text-black' : 'border-[#555] bg-[#1f1f1f] text-white'} outline-none`}
-                            />
-
-                            <div className="grid grid-cols-4 gap-1.5">
-                              {['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'].map(root => (
-                                <button
-                                  key={root}
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={(e) => { e.stopPropagation(); setChordInputValue(root); }}
-                                  className={`py-1.5 text-xs font-bold rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-black hover:bg-[#e0d036] hover:border-[#e0d036]' : 'border-[#444] bg-[#333] text-white hover:bg-[#e0d036] hover:text-black'} transition-colors`}
-                                >
-                                  {root}
-                                </button>
-                              ))}
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-1.5 mt-1 border-t border-dashed border-gray-300 dark:border-[#444] pt-2">
-                              {['m', 'maj', '7', 'm7', 'maj7', 'sus2', 'sus4', 'dim', 'aug'].map(ext => (
-                                <button
-                                  key={ext}
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    let current = chordInputValue;
-                                    const match = current.match(/^[A-G][b#]?/i);
-                                    if (match) {
-                                      setChordInputValue(normalizeChordInput(match[0].toUpperCase() + ext));
-                                    } else {
-                                      setChordInputValue(normalizeChordInput(current + ext));
-                                    }
-                                  }}
-                                  className={`py-1 text-[11px] font-medium rounded border ${isDayMode ? 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-200' : 'border-[#444] bg-[#333] text-gray-300 hover:bg-[#444]'} transition-colors`}
-                                >
-                                  {ext}
-                                </button>
-                              ))}
-                            </div>
-
-                            <div className="flex justify-end gap-2 pt-1">
-                              <button
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={(e) => { e.stopPropagation(); setEditingChordId(null); }}
-                                className={`px-2 py-1 text-[11px] rounded border ${isDayMode ? 'border-gray-300 text-gray-700 hover:bg-gray-100' : 'border-[#555] text-gray-300 hover:bg-[#333]'}`}
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={(e) => { e.stopPropagation(); saveChord(sw.id); }}
-                                className="px-2 py-1 text-[11px] rounded bg-[#e0d036] text-black font-bold hover:bg-yellow-400"
-                              >
-                                Apply
-                              </button>
-                            </div>
                           </div>
-                        </div>
-                      ) : sw.chord ? (
-                        <span
-                          onClick={(e) => { e.stopPropagation(); setEditingChordId(sw.id); setChordInputValue(sw.chord); }}
-                          className={`text-sm font-bold ${theme.chordText} cursor-pointer ${isDayMode ? 'hover:text-black' : 'hover:text-white'} transition-colors ${isChordOnly ? 'ml-0' : ''}`}
-                          title="Edit Chord"
-                        >
-                          [{sw.chord}]
-                        </span>
-                      ) : (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setEditingChordId(sw.id); setChordInputValue(''); }}
-                          className={`w-4 h-4 flex items-center justify-center text-[10px] ${isDayMode ? 'bg-[#cccccc] text-gray-700' : 'bg-[#555] text-white'} rounded-full opacity-0 group-hover:opacity-100 hover:bg-[#e0d036] hover:text-black transition-all ml-1`}
-                        >
-                          <Plus size={10} strokeWidth={3} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-
-                <input
-                  id="main-word-input"
-                  value={inputValue}
-                  onChange={e => applyMainInputValue(e.target.value)}
-                  onKeyDown={handleInputKeyDown}
-                  onPaste={handlePaste}
-                  placeholder={stagedWords.length === 0 ? (isChordMode ? "Type chords (e.g. C Am F) and press Space..." : "Paste lyrics or type space to separate... ('x' for gap)") : ""}
-                  className={`bg-transparent text-sm font-mono ${theme.subtleText} outline-none flex-1 min-w-[140px] md:min-w-[250px] ml-2 py-1 placeholder-[#999]`}
-                />
-              </div>
-
-              <button
-                onClick={submitSection}
-                disabled={stagedWords.length === 0 && !inputValue.trim()}
-                className={`p-3 rounded-lg flex items-center justify-center transition-all h-[56px] w-[56px] ${stagedWords.length > 0 || inputValue.trim()
-                  ? 'bg-[#e0d036] text-black hover:bg-yellow-400 shadow-[0_0_15px_rgba(224,208,54,0.3)]'
-                  : 'bg-[#444] text-gray-500 cursor-not-allowed'
-                  }`}
-              >
-                <Check size={24} strokeWidth={3} />
-              </button>
-            </div>
-            {isChordMode && isChordSyntaxError && (
-              <p className="px-2 text-xs text-red-500 font-medium">Invalid chord format. Example: C, F#, Bb, Am, Cmaj7, D/F#</p>
-            )}
-          </div>
-        </div>
-
-        {/* --- Sections Area (Groups with Dot Grid) --- */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 relative">
-          {activeGroups.length === 0 ? (
-            <div className={`text-center mt-20 flex flex-col items-center ${theme.subtleText}`}>
-              <Music size={48} className="mb-4 opacity-20" />
-              <p>Type lyrics above to start your first part.</p>
-            </div>
-          ) : (
-            <div className="space-y-6 pb-32">
-              {activeGroups.map((group) => (
-                <div
-                  key={group.id}
-                  className={`group/container border-2 border-dashed ${theme.groupBorder} hover:border-opacity-70 rounded-xl transition-colors min-h-[140px] flex flex-col overflow-hidden`}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => handleGroupDrop(e, group.id)}
-                >
-                  {/* Dot Grid Background overlay */}
-                  <div className={`absolute inset-0 pointer-events-none opacity-10 ${isDayMode ? 'bg-[radial-gradient(#555_1.5px,transparent_1.5px)]' : 'bg-[radial-gradient(#888_1.5px,transparent_1.5px)]'} bg-[length:24px_24px] z-0`}></div>
-
-                  {/* Group Header */}
-                  <div className={`p-4 flex items-center gap-3 relative z-10 ${theme.groupHeader} backdrop-blur-sm border-b ${theme.borderLight}`}>
-                    <input
-                      value={group.title}
-                      onChange={(e) => updateGroupTitle(group.id, e.target.value)}
-                      className={`bg-transparent ${theme.accentText} font-bold text-xl outline-none transition-colors w-40 placeholder-[#999]`}
-                      placeholder="Part Name"
-                    />
-                    <div className={`flex-1 border-t border-dashed ${theme.border}`}></div>
-                    <button
-                      onClick={() => requestRemoveGroup(group.id)}
-                      className={`${theme.subtleText} hover:text-red-500 transition-colors opacity-0 group-hover/container:opacity-100`}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-
-                  {/* Droppable Area for Sections */}
-                  <div className="flex-1 p-4 space-y-4 md:space-y-3 relative z-10">
-                    {(Array.isArray(group.sections) ? group.sections : []).map((section) => {
-                      // เช็คว่า section นี้เป็นคอร์ดเพียวๆ หรือไม่ (คำทั้งหมดเป็น 'x')
-                      const isChordOnlySection = section.lyrics && section.lyrics.length > 0 && section.lyrics.every(l => l.isX);
-
-                      return (
-                        <div
-                          key={section.id}
-                          draggable
-                          onDragStart={(e) => handleDragStartSection(e, group.id, section.id)}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => handleSectionDrop(e, group.id, section.id)}
-                          className={`${theme.card} rounded-md shadow-md overflow-hidden border-l-4 border-[#e0d036] relative group transition-all flex`}
-                        >
-                          {/* Drag Handle */}
-                          <div className={`w-6 ${theme.dragHandle} flex items-center justify-center ${theme.subtleText} cursor-grab active:cursor-grabbing border-r ${theme.borderLight}`}>
-                            <GripVertical size={14} />
-                          </div>
-
-                          {/* Section Delete Button */}
-                          <button
-                            onClick={() => removeSection(group.id, section.id)}
-                            className={`absolute right-2 p-1.5 bg-red-500/10 text-red-400 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition z-30 ${isChordOnlySection ? 'top-1/2 -translate-y-1/2' : 'top-2'}`}
+                        ) : sw.chord ? (
+                          <span
+                            onClick={(e) => { e.stopPropagation(); setEditingChordId(sw.id); setChordInputValue(sw.chord); }}
+                            className={`text-sm font-bold ${theme.chordText} cursor-pointer ${isDayMode ? 'hover:text-black' : 'hover:text-white'} transition-colors ${isChordOnly ? 'ml-0' : ''}`}
+                            title="Edit Chord"
                           >
-                            <Trash2 size={14} />
+                            [{sw.chord}]
+                          </span>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setEditingChordId(sw.id); setChordInputValue(''); }}
+                            className={`w-4 h-4 flex items-center justify-center text-[10px] ${isDayMode ? 'bg-[#cccccc] text-gray-700' : 'bg-[#555] text-white'} rounded-full opacity-0 group-hover:opacity-100 hover:bg-[#e0d036] hover:text-black transition-all ml-1`}
+                          >
+                            <Plus size={10} strokeWidth={3} />
                           </button>
+                        )}
+                      </div>
+                    );
+                  })}
 
-                          <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
-                            <div className={`grid grid-cols-[repeat(32,minmax(0,1fr))] min-w-[760px] md:min-w-[680px] lg:min-w-0 relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
-                              {Array.from({ length: 32 }).map((_, i) => {
-                                const sectionChords = Array.isArray(section.chords) ? section.chords : [];
-                                const sectionLyrics = Array.isArray(section.lyrics) ? section.lyrics : [];
-                                const chordsHere = sectionChords.filter(c => c.pos === i);
-                                const lyricsHere = sectionLyrics.filter(l => l.pos === i);
+                  <input
+                    id="main-word-input"
+                    value={inputValue}
+                    onChange={e => applyMainInputValue(e.target.value)}
+                    onKeyDown={handleInputKeyDown}
+                    onPaste={handlePaste}
+                    placeholder={stagedWords.length === 0 ? (isChordMode ? "Type chords (e.g. C Am F) and press Space..." : "Paste lyrics or type space to separate... ('x' for gap)") : ""}
+                    className={`bg-transparent text-sm font-mono ${theme.subtleText} outline-none flex-1 min-w-[140px] md:min-w-[250px] ml-2 py-1 placeholder-[#999]`}
+                  />
+                </div>
 
-                                return (
-                                  <div
-                                    key={i}
-                                    className="border-l border-white/5 flex flex-col items-start justify-start relative hover:bg-white/10 transition-colors"
-                                    onDragOver={(e) => e.preventDefault()}
-                                    onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
-                                  >
-                                    {/* Chords */}
-                                    <div className="h-8 w-full relative z-20 flex items-center">
-                                      {chordsHere.map(chord => (
-                                        <div
-                                          key={chord.id}
-                                          draggable
-                                          onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
-                                          className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30`}
-                                        >
-                                          <button
-                                            onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
-                                            className="absolute -left-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform -translate-x-1 group-hover/chord:translate-x-0"
-                                          >
-                                            <ChevronLeft size={10} />
-                                          </button>
-                                          {chord.text}
-                                          <button
-                                            onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
-                                            className="absolute -right-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform translate-x-1 group-hover/chord:translate-x-0"
-                                          >
-                                            <ChevronRight size={10} />
-                                          </button>
-                                        </div>
-                                      ))}
-                                    </div>
+                <button
+                  onClick={submitSection}
+                  disabled={stagedWords.length === 0 && !inputValue.trim()}
+                  className={`p-3 rounded-lg flex items-center justify-center transition-all h-[56px] w-[56px] ${stagedWords.length > 0 || inputValue.trim()
+                    ? 'bg-[#e0d036] text-black hover:bg-yellow-400 shadow-[0_0_15px_rgba(224,208,54,0.3)]'
+                    : 'bg-[#444] text-gray-500 cursor-not-allowed'
+                    }`}
+                >
+                  <Check size={24} strokeWidth={3} />
+                </button>
+              </div>
+              {isChordMode && isChordSyntaxError && (
+                <p className="px-2 text-xs text-red-500 font-medium">Invalid chord format. Example: C, F#, Bb, Am, Cmaj7, D/F#</p>
+              )}
+            </div>
 
-                                    {/* Lyrics */}
-                                    {!isChordOnlySection && (
-                                      <div className="h-8 w-full relative z-10 flex items-center">
-                                        {lyricsHere.map(lyric => (
-                                          <span
-                                            key={lyric.id}
-                                            className={`absolute left-0 text-base font-medium tracking-wide leading-tight pl-1 font-mono ${theme.lyricText} whitespace-nowrap pointer-events-none`}
-                                          >
-                                            {/* If it's the 'x' token, render nothing but it still consumes space! */}
-                                            {lyric.isX ? '' : lyric.text}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
+            {/* Live Preview of Input (Mirrors what the section will look like) */}
+            {(stagedWords.length > 0 || inputValue.trim() || isChordSyntaxError) && (
+              <div className="mt-4">
+                <p className={`text-xs font-bold uppercase tracking-wider mb-2 ${theme.subtleText} ml-1 flex items-center gap-2`}>
+                  <Eye size={14} /> Live Preview
+                </p>
+                <div className={`${theme.card} rounded-md shadow-md overflow-hidden border-l-4 border-[#e0d036] relative flex opacity-80 pointer-events-none`}>
+                  <div className={`w-6 ${theme.dragHandle} flex items-center justify-center ${theme.subtleText} border-r ${theme.borderLight}`}>
+                    <GripVertical size={14} />
+                  </div>
+                  <div className={`flex-1 overflow-x-auto overscroll-x-contain relative py-3 px-3 touch-pan-x`}>
+                    <div className={`grid grid-cols-[repeat(32,minmax(max-content,1fr))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid`}>
+                      {Array.from({ length: 32 }).map((_, i) => {
+                        // Dynamically compute preview sections
+                        let currentStaged = [...stagedWords];
 
-                                  </div>
-                                );
-                              })}
+                        if (inputValue.trim()) {
+                          const result = processInputWord(inputValue.trim(), isChordMode, 'preview');
+                          if (!result.error) {
+                            currentStaged.push(result.item);
+                          }
+                        }
+
+                        const { lyrics: previewLyrics, chords: previewChords } = processFinalWordsToSectionItems(currentStaged, 'prev');
+
+                        const chordsHere = previewChords.filter(c => c.pos === i);
+                        const lyricsHere = previewLyrics.filter(l => l.pos === i);
+                        const isChordOnlySection = currentStaged.every(w => w.word.toLowerCase() === 'x');
+
+                        return (
+                          <div key={`prev-${i}`} className="border-l border-white/5 flex flex-col items-start justify-start relative">
+                            {/* Chords */}
+                            <div className="h-8 w-full relative z-20 flex items-center">
+                              {chordsHere.map(chord => (
+                                <div key={chord.id} className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap z-30`}>
+                                  {chord.text}
+                                </div>
+                              ))}
                             </div>
+
+                            {/* Lyrics */}
+                            {!isChordOnlySection && (
+                              <div className="h-8 w-full relative z-10 flex items-center overflow-visible">
+                                {lyricsHere.map(lyric => (
+                                  <span key={lyric.id} className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}>
+                                    {lyric.isX ? <span className="text-gray-400 opacity-50">-</span> : lyric.text}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              ))}
+              </div>
+            )}
+          </div>
 
-              {/* --- Add Group (+) Button --- */}
-              <button
-                onClick={addGroup}
-                className={`w-full py-6 mt-6 border-2 border-dashed ${theme.addBtn} rounded-xl flex flex-col items-center justify-center transition-all group/add`}
-              >
-                <Plus size={32} className="group-hover/add:scale-125 transition-transform duration-300" />
-                <span className="text-xs font-bold uppercase tracking-widest mt-2 opacity-0 group-hover/add:opacity-100 transition-opacity">Add Part</span>
-              </button>
+          {/* --- Sections Area (Groups with Dot Grid) --- */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 relative">
+            {activeGroups.length === 0 ? (
+              <div className={`text-center mt-20 flex flex-col items-center ${theme.subtleText}`}>
+                <Music size={48} className="mb-4 opacity-20" />
+                <p>Type lyrics above to start your first part.</p>
+              </div>
+            ) : (
+              <div className="space-y-6 pb-32">
+                {activeGroups.map((group) => (
+                  <div
+                    key={group.id}
+                    className={`group/container border-2 border-dashed ${theme.groupBorder} hover:border-opacity-70 rounded-xl transition-colors min-h-[140px] flex flex-col overflow-hidden`}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => handleGroupDrop(e, group.id)}
+                  >
+                    {/* Dot Grid Background overlay */}
+                    <div className={`absolute inset-0 pointer-events-none opacity-10 ${isDayMode ? 'bg-[radial-gradient(#555_1.5px,transparent_1.5px)]' : 'bg-[radial-gradient(#888_1.5px,transparent_1.5px)]'} bg-[length:24px_24px] z-0`}></div>
 
-            </div>
-          )}
+                    {/* Group Header */}
+                    <div className={`p-4 flex items-center gap-3 relative z-10 ${theme.groupHeader} backdrop-blur-sm border-b ${theme.borderLight}`}>
+                      <input
+                        value={group.title}
+                        onChange={(e) => updateGroupTitle(group.id, e.target.value)}
+                        className={`bg-transparent ${theme.accentText} font-bold text-xl outline-none transition-colors w-40 placeholder-[#999]`}
+                        placeholder="Part Name"
+                      />
+                      <div className={`flex-1 border-t border-dashed ${theme.border}`}></div>
+                      <button
+                        onClick={() => requestRemoveGroup(group.id)}
+                        className={`${theme.subtleText} hover:text-red-500 transition-colors opacity-0 group-hover/container:opacity-100`}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+
+                    {/* Droppable Area for Sections */}
+                    <div className="flex-1 p-4 space-y-4 md:space-y-3 relative z-10">
+                      {(Array.isArray(group.sections) ? group.sections : []).map((section) => {
+                        // เช็คว่า section นี้เป็นคอร์ดเพียวๆ หรือไม่ (คำทั้งหมดเป็น 'x')
+                        const isChordOnlySection = section.lyrics && section.lyrics.length > 0 && section.lyrics.every(l => l.isX);
+
+                        return (
+                          <div
+                            key={section.id}
+                            draggable
+                            onDragStart={(e) => handleDragStartSection(e, group.id, section.id)}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => handleSectionDrop(e, group.id, section.id)}
+                            className={`${theme.card} rounded-md shadow-md overflow-hidden border-l-4 border-[#e0d036] relative group transition-all flex`}
+                          >
+                            {/* Drag Handle */}
+                            <div className={`w-6 ${theme.dragHandle} flex items-center justify-center ${theme.subtleText} cursor-grab active:cursor-grabbing border-r ${theme.borderLight}`}>
+                              <GripVertical size={14} />
+                            </div>
+
+                            {/* Section Delete Button */}
+                            <button
+                              onClick={() => removeSection(group.id, section.id)}
+                              className={`absolute right-2 p-1.5 bg-red-500/10 text-red-400 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition z-30 ${isChordOnlySection ? 'top-1/2 -translate-y-1/2' : 'top-2'}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+
+                            <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
+                              <div className={`grid grid-cols-[repeat(32,minmax(max-content,1fr))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
+                                {Array.from({ length: 32 }).map((_, i) => {
+                                  const sectionChords = Array.isArray(section.chords) ? section.chords : [];
+                                  const sectionLyrics = Array.isArray(section.lyrics) ? section.lyrics : [];
+                                  const chordsHere = sectionChords.filter(c => c.pos === i);
+                                  const lyricsHere = sectionLyrics.filter(l => l.pos === i);
+
+                                  return (
+                                    <div
+                                      key={i}
+                                      className="border-l border-white/5 flex flex-col items-start justify-start relative hover:bg-white/10 transition-colors"
+                                      onDragOver={(e) => e.preventDefault()}
+                                      onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
+                                    >
+                                      {/* Chords */}
+                                      <div className="h-8 w-full relative z-20 flex items-center">
+                                        {chordsHere.map(chord => (
+                                          <div
+                                            key={chord.id}
+                                            draggable
+                                            onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
+                                            className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30`}
+                                          >
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
+                                              className="absolute -left-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform -translate-x-1 group-hover/chord:translate-x-0"
+                                            >
+                                              <ChevronLeft size={10} />
+                                            </button>
+                                            {chord.text}
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
+                                              className="absolute -right-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform translate-x-1 group-hover/chord:translate-x-0"
+                                            >
+                                              <ChevronRight size={10} />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      {/* Lyrics */}
+                                      {!isChordOnlySection && (
+                                        <div className="h-8 w-full relative z-10 flex items-center">
+                                          {lyricsHere.map(lyric => (
+                                            <span
+                                              key={lyric.id}
+                                              className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}
+                                            >
+                                              {/* If it's the 'x' token, render nothing but it still consumes space! */}
+                                              {lyric.isX ? '' : lyric.text}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+
+                {/* --- Add Group (+) Button --- */}
+                <button
+                  onClick={addGroup}
+                  className={`w-full py-6 mt-6 border-2 border-dashed ${theme.addBtn} rounded-xl flex flex-col items-center justify-center transition-all group/add`}
+                >
+                  <Plus size={32} className="group-hover/add:scale-125 transition-transform duration-300" />
+                  <span className="text-xs font-bold uppercase tracking-widest mt-2 opacity-0 group-hover/add:opacity-100 transition-opacity">Add Part</span>
+                </button>
+
+              </div>
+            )}
+          </div>
+
         </div>
-
-      </div>
       </div>
 
       {/* --- MODALS MOVED TO ROOT TO FIX Z-INDEX OVERLAP --- */}
