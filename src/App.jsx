@@ -1280,7 +1280,7 @@ const App = () => {
                       const { lyrics: previewLyrics, chords: previewChords } = processFinalWordsToSectionItems(currentStaged, 'prev');
                       const isChordOnlySection = currentStaged.every(w => w.word.toLowerCase() === 'x');
                       return (
-                        <div className="grid grid-cols-[repeat(32,minmax(max-content,1fr))] grid-rows-[auto_auto] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid">
+                        <div className="grid grid-cols-[repeat(32,minmax(2rem,max-content))] grid-rows-[auto_auto] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid">
                           {/* Row 1: chord cells */}
                           {Array.from({ length: 32 }).map((_, i) => {
                             const chordsHere = previewChords.filter(c => c.pos === i);
@@ -1381,7 +1381,7 @@ const App = () => {
                             </button>
 
                             <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
-                              <div className={`grid grid-cols-[repeat(32,minmax(max-content,1fr))] grid-rows-[auto_auto] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
+                              <div className={`grid grid-cols-[repeat(32,minmax(2rem,max-content))] grid-rows-[auto_auto] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
                                 {/* Row 1: chord cells */}
                                 {Array.from({ length: 32 }).map((_, i) => {
                                   const sectionChords = Array.isArray(section.chords) ? section.chords : [];
