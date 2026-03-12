@@ -206,29 +206,18 @@ const SectionGrid = ({ lyrics, chords, theme, isChordOnly, onMoveChord, onDragSt
     return () => ro.disconnect();
   }, [lyrics, chords]);
 
-  // Build a sorted list of lyric positions that have words, for interpolating unmapped chord positions
-  const wordPosList = lyrics.filter(l => !l.isX).map(l => l.pos).sort((a, b) => a - b);
-
   const getChordLeft = (pos) => {
-    // Direct hit: chord pos matches a word pos
     if (chordOffsets[pos] !== undefined) return chordOffsets[pos];
-    // Interpolate between known word positions
+    // Fallback: snap to nearest measured word position
     const keys = Object.keys(chordOffsets).map(Number).sort((a, b) => a - b);
     if (keys.length === 0) return 0;
-    if (pos <= keys[0]) return chordOffsets[keys[0]];
-    if (pos >= keys[keys.length - 1]) {
-      // extrapolate past last word using average slot width
-      const containerWidth = containerRef.current ? containerRef.current.offsetWidth : 0;
-      const lastKey = keys[keys.length - 1];
-      const slotWidth = containerWidth / 32;
-      return chordOffsets[lastKey] + (pos - lastKey) * slotWidth;
+    let nearest = keys[0];
+    let minDist = Math.abs(pos - keys[0]);
+    for (const k of keys) {
+      const d = Math.abs(pos - k);
+      if (d < minDist) { minDist = d; nearest = k; }
     }
-    // Linear interpolation between surrounding word positions
-    let lo = keys[0], hi = keys[keys.length - 1];
-    for (let k of keys) { if (k <= pos) lo = k; if (k >= pos && k < hi) hi = k; }
-    if (lo === hi) return chordOffsets[lo];
-    const t = (pos - lo) / (hi - lo);
-    return chordOffsets[lo] + t * (chordOffsets[hi] - chordOffsets[lo]);
+    return chordOffsets[nearest];
   };
 
   return (
@@ -717,16 +706,31 @@ const App = () => {
         return {
           ...g, sections: g.sections.map(sec => {
             if (sec.id !== sectionId) return sec;
+            // Build sorted list of word positions to snap between
+            const wordPositions = [...new Set(sec.lyrics.map(l => l.pos))].sort((a, b) => a - b);
             let newChords = [...sec.chords];
             const chordIndex = newChords.findIndex(c => c.id === chordId);
             const currentPos = newChords[chordIndex].pos;
-            let newPos = currentPos + direction;
 
-            if (newPos < 0) newPos = 0;
-            if (newPos > 31) newPos = 31;
+            // Find where currentPos sits in the word position list
+            const currentIdx = wordPositions.indexOf(currentPos);
+            let newPos;
+            if (currentIdx !== -1) {
+              // Currently on a word — move to prev/next word
+              const targetIdx = currentIdx + direction;
+              if (targetIdx < 0 || targetIdx >= wordPositions.length) return sec;
+              newPos = wordPositions[targetIdx];
+            } else {
+              // Not on a word (rare) — snap to nearest word in direction
+              if (direction > 0) {
+                newPos = wordPositions.find(p => p > currentPos) ?? wordPositions[wordPositions.length - 1];
+              } else {
+                newPos = [...wordPositions].reverse().find(p => p < currentPos) ?? wordPositions[0];
+              }
+            }
 
-            const existingIndex = newChords.findIndex(c => c.pos === newPos);
-            if (existingIndex !== -1 && existingIndex !== chordIndex) {
+            const existingIndex = newChords.findIndex(c => c.pos === newPos && c.id !== chordId);
+            if (existingIndex !== -1) {
               newChords[existingIndex].pos = currentPos;
             }
             newChords[chordIndex].pos = newPos;
