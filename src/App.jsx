@@ -157,6 +157,7 @@ const parsePastedText = (pasteText, isChordMode, baseId = Date.now()) => {
   }, []);
 };
 
+const WORD_STEP = 4; // slots per word — gives 3 fine steps between each word
 const processFinalWordsToSectionItems = (finalWords, baseId = Date.now()) => {
   let newLyrics = [];
   let newChords = [];
@@ -172,7 +173,7 @@ const processFinalWordsToSectionItems = (finalWords, baseId = Date.now()) => {
       newChords.push({ id: `c-${baseId}-${i}`, text: w.chord, pos: chordPos });
     }
 
-    let slotsNeeded = isX ? 2 : 1;
+    let slotsNeeded = isX ? WORD_STEP * 2 : WORD_STEP;
     currentPos += slotsNeeded;
     if (currentPos > 31) currentPos = 31;
   });
@@ -180,21 +181,23 @@ const processFinalWordsToSectionItems = (finalWords, baseId = Date.now()) => {
   return { lyrics: newLyrics, chords: newChords };
 };
 
-// SectionGrid: renders a chord row absolutely positioned over a naturally-spaced lyric row.
-// Word positions are measured with refs so chords align pixel-perfectly above their word.
-const SectionGrid = ({ lyrics, chords, theme, isChordOnly, onMoveChord, onDragStartChord, onDropChord, groupId, sectionId, interactive = true }) => {
-  const wordRefs = useRef({});   // pos -> DOM span element
+// SectionGrid: chord label row (absolute) over a naturally-spaced lyric row.
+// Supports mouse drag for free positioning and < > buttons for fine steps.
+const SectionGrid = ({ lyrics, chords, theme, isChordOnly, onMoveChord, onDragStartChord, onDropChord, interactive = true }) => {
+  const wordRefs = useRef({});
   const containerRef = useRef(null);
-  const [chordOffsets, setChordOffsets] = useState({}); // pos -> left px
+  const [chordOffsets, setChordOffsets] = useState({});
+  // dragging state: { chordId, startX, startLeft }
+  const dragState = useRef(null);
+  const [draggingId, setDraggingId] = useState(null);
+  const [draggingLeft, setDraggingLeft] = useState(0);
 
   const measure = () => {
     if (!containerRef.current) return;
     const containerLeft = containerRef.current.getBoundingClientRect().left;
     const offsets = {};
     Object.entries(wordRefs.current).forEach(([pos, el]) => {
-      if (el) {
-        offsets[pos] = el.getBoundingClientRect().left - containerLeft;
-      }
+      if (el) offsets[pos] = el.getBoundingClientRect().left - containerLeft;
     });
     setChordOffsets(offsets);
   };
@@ -208,55 +211,122 @@ const SectionGrid = ({ lyrics, chords, theme, isChordOnly, onMoveChord, onDragSt
 
   const getChordLeft = (pos) => {
     if (chordOffsets[pos] !== undefined) return chordOffsets[pos];
-    // Fallback: snap to nearest measured word position
     const keys = Object.keys(chordOffsets).map(Number).sort((a, b) => a - b);
     if (keys.length === 0) return 0;
-    let nearest = keys[0];
-    let minDist = Math.abs(pos - keys[0]);
-    for (const k of keys) {
-      const d = Math.abs(pos - k);
-      if (d < minDist) { minDist = d; nearest = k; }
+    if (pos < keys[0]) {
+      const step = keys.length > 1 ? (chordOffsets[keys[1]] - chordOffsets[keys[0]]) / (keys[1] - keys[0]) : 16;
+      return Math.max(0, chordOffsets[keys[0]] + (pos - keys[0]) * step);
     }
-    return chordOffsets[nearest];
+    if (pos > keys[keys.length - 1]) {
+      const last = keys[keys.length - 1];
+      const step = keys.length > 1 ? (chordOffsets[last] - chordOffsets[keys[keys.length - 2]]) / (last - keys[keys.length - 2]) : 16;
+      return chordOffsets[last] + (pos - last) * step;
+    }
+    let lo = keys[0], hi = keys[1];
+    for (let j = 0; j < keys.length - 1; j++) {
+      if (keys[j] <= pos && pos <= keys[j + 1]) { lo = keys[j]; hi = keys[j + 1]; break; }
+    }
+    const t = (pos - lo) / (hi - lo);
+    return chordOffsets[lo] + t * (chordOffsets[hi] - chordOffsets[lo]);
+  };
+
+  // Convert a pixel left offset back to nearest pos value
+  const pixelToPos = (px) => {
+    const keys = Object.keys(chordOffsets).map(Number).sort((a, b) => a - b);
+    if (keys.length === 0) return 0;
+    const containerWidth = containerRef.current ? containerRef.current.offsetWidth : 1;
+    // Build a full map: for each integer pos 0..31, compute its pixel position
+    const allPosPixels = [];
+    for (let p = 0; p <= 31; p++) {
+      allPosPixels.push({ pos: p, px: getChordLeft(p) });
+    }
+    // Find nearest
+    let nearest = allPosPixels[0];
+    let minDist = Math.abs(px - allPosPixels[0].px);
+    for (const item of allPosPixels) {
+      const d = Math.abs(px - item.px);
+      if (d < minDist) { minDist = d; nearest = item; }
+    }
+    return nearest.pos;
+  };
+
+  const handlePointerDown = (e, chord) => {
+    if (!interactive) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startLeft = getChordLeft(chord.pos);
+    dragState.current = { chordId: chord.id, startX: e.clientX, startLeft };
+    setDraggingId(chord.id);
+    setDraggingLeft(startLeft);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e) => {
+    if (!dragState.current) return;
+    const { startX, startLeft } = dragState.current;
+    const containerWidth = containerRef.current ? containerRef.current.offsetWidth : 1;
+    const newLeft = Math.max(0, Math.min(containerWidth, startLeft + (e.clientX - startX)));
+    setDraggingLeft(newLeft);
+  };
+
+  const handlePointerUp = (e, chord) => {
+    if (!dragState.current || dragState.current.chordId !== chord.id) return;
+    const { startX, startLeft } = dragState.current;
+    const containerWidth = containerRef.current ? containerRef.current.offsetWidth : 1;
+    const finalLeft = Math.max(0, Math.min(containerWidth, startLeft + (e.clientX - startX)));
+    const newPos = pixelToPos(finalLeft);
+    dragState.current = null;
+    setDraggingId(null);
+    onMoveChord(chord.id, newPos - chord.pos);
   };
 
   return (
     <div ref={containerRef} className="relative w-full">
-      {/* Chord row — absolutely positioned over lyrics */}
-      <div className="relative h-10 w-full">
+      {/* Chord row */}
+      <div className="relative h-8 w-full">
         {chords.map(chord => {
-          const left = getChordLeft(chord.pos);
+          const isDragging = draggingId === chord.id;
+          const left = isDragging ? draggingLeft : getChordLeft(chord.pos);
           return (
             <div
               key={chord.id}
-              draggable={interactive}
-              onDragStart={interactive ? (e) => onDragStartChord(e, chord) : undefined}
               style={{ left }}
-              className={`absolute top-0.5 font-bold text-xs ${theme.accent} text-black rounded shadow-sm whitespace-nowrap ${interactive ? 'group/chord cursor-grab active:cursor-grabbing' : ''} z-30 flex flex-col items-center`}
+              onPointerDown={interactive ? (e) => handlePointerDown(e, chord) : undefined}
+              onPointerMove={interactive ? handlePointerMove : undefined}
+              onPointerUp={interactive ? (e) => handlePointerUp(e, chord) : undefined}
+              className={`absolute top-0 h-full flex items-center ${interactive ? 'group/chord cursor-grab active:cursor-grabbing' : ''} z-30 select-none`}
             >
-              <span className="px-1 py-0 leading-tight">{chord.text}</span>
+              {/* Left arrow */}
               {interactive && (
-                <div className="flex items-center gap-0.5 mt-0.5 opacity-0 group-hover/chord:opacity-100 transition-all">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onMoveChord(chord.id, -1); }}
-                    className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
-                  >
-                    <ChevronLeft size={9} />
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onMoveChord(chord.id, 1); }}
-                    className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
-                  >
-                    <ChevronRight size={9} />
-                  </button>
-                </div>
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); onMoveChord(chord.id, -1); }}
+                  className="h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all shrink-0"
+                >
+                  <ChevronLeft size={9} />
+                </button>
+              )}
+              {/* Chord label */}
+              <span className={`font-bold text-xs ${theme.accent} text-black px-1 py-0.5 rounded shadow-sm whitespace-nowrap leading-tight`}>
+                {chord.text}
+              </span>
+              {/* Right arrow */}
+              {interactive && (
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); onMoveChord(chord.id, 1); }}
+                  className="h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all shrink-0"
+                >
+                  <ChevronRight size={9} />
+                </button>
               )}
             </div>
           );
         })}
       </div>
 
-      {/* Lyrics row — natural flex spacing */}
+      {/* Lyrics row */}
       {!isChordOnly && (
         <div className="flex flex-row h-8 items-center">
           {lyrics.map(lyric => (
@@ -264,8 +334,6 @@ const SectionGrid = ({ lyrics, chords, theme, isChordOnly, onMoveChord, onDragSt
               key={lyric.id}
               ref={el => { wordRefs.current[lyric.pos] = el; }}
               className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}
-              onDragOver={interactive ? (e) => e.preventDefault() : undefined}
-              onDrop={interactive && onDropChord ? (e) => onDropChord(e, lyric.pos) : undefined}
             >
               {lyric.isX ? '' : lyric.text}
             </span>
@@ -706,33 +774,14 @@ const App = () => {
         return {
           ...g, sections: g.sections.map(sec => {
             if (sec.id !== sectionId) return sec;
-            // Build sorted list of word positions to snap between
-            const wordPositions = [...new Set(sec.lyrics.map(l => l.pos))].sort((a, b) => a - b);
             let newChords = [...sec.chords];
             const chordIndex = newChords.findIndex(c => c.id === chordId);
             const currentPos = newChords[chordIndex].pos;
-
-            // Find where currentPos sits in the word position list
-            const currentIdx = wordPositions.indexOf(currentPos);
-            let newPos;
-            if (currentIdx !== -1) {
-              // Currently on a word — move to prev/next word
-              const targetIdx = currentIdx + direction;
-              if (targetIdx < 0 || targetIdx >= wordPositions.length) return sec;
-              newPos = wordPositions[targetIdx];
-            } else {
-              // Not on a word (rare) — snap to nearest word in direction
-              if (direction > 0) {
-                newPos = wordPositions.find(p => p > currentPos) ?? wordPositions[wordPositions.length - 1];
-              } else {
-                newPos = [...wordPositions].reverse().find(p => p < currentPos) ?? wordPositions[0];
-              }
-            }
-
+            let newPos = currentPos + direction;
+            if (newPos < 0) newPos = 0;
+            if (newPos > 31) newPos = 31;
             const existingIndex = newChords.findIndex(c => c.pos === newPos && c.id !== chordId);
-            if (existingIndex !== -1) {
-              newChords[existingIndex].pos = currentPos;
-            }
+            if (existingIndex !== -1) newChords[existingIndex].pos = currentPos;
             newChords[chordIndex].pos = newPos;
             return { ...sec, chords: newChords };
           })
