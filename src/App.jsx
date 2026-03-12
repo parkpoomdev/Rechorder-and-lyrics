@@ -180,6 +180,113 @@ const processFinalWordsToSectionItems = (finalWords, baseId = Date.now()) => {
   return { lyrics: newLyrics, chords: newChords };
 };
 
+// SectionGrid: renders a chord row absolutely positioned over a naturally-spaced lyric row.
+// Word positions are measured with refs so chords align pixel-perfectly above their word.
+const SectionGrid = ({ lyrics, chords, theme, isChordOnly, onMoveChord, onDragStartChord, onDropChord, groupId, sectionId, interactive = true }) => {
+  const wordRefs = useRef({});   // pos -> DOM span element
+  const containerRef = useRef(null);
+  const [chordOffsets, setChordOffsets] = useState({}); // pos -> left px
+
+  const measure = () => {
+    if (!containerRef.current) return;
+    const containerLeft = containerRef.current.getBoundingClientRect().left;
+    const offsets = {};
+    Object.entries(wordRefs.current).forEach(([pos, el]) => {
+      if (el) {
+        offsets[pos] = el.getBoundingClientRect().left - containerLeft;
+      }
+    });
+    setChordOffsets(offsets);
+  };
+
+  useEffect(() => {
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, [lyrics, chords]);
+
+  // Build a sorted list of lyric positions that have words, for interpolating unmapped chord positions
+  const wordPosList = lyrics.filter(l => !l.isX).map(l => l.pos).sort((a, b) => a - b);
+
+  const getChordLeft = (pos) => {
+    // Direct hit: chord pos matches a word pos
+    if (chordOffsets[pos] !== undefined) return chordOffsets[pos];
+    // Interpolate between known word positions
+    const keys = Object.keys(chordOffsets).map(Number).sort((a, b) => a - b);
+    if (keys.length === 0) return 0;
+    if (pos <= keys[0]) return chordOffsets[keys[0]];
+    if (pos >= keys[keys.length - 1]) {
+      // extrapolate past last word using average slot width
+      const containerWidth = containerRef.current ? containerRef.current.offsetWidth : 0;
+      const lastKey = keys[keys.length - 1];
+      const slotWidth = containerWidth / 32;
+      return chordOffsets[lastKey] + (pos - lastKey) * slotWidth;
+    }
+    // Linear interpolation between surrounding word positions
+    let lo = keys[0], hi = keys[keys.length - 1];
+    for (let k of keys) { if (k <= pos) lo = k; if (k >= pos && k < hi) hi = k; }
+    if (lo === hi) return chordOffsets[lo];
+    const t = (pos - lo) / (hi - lo);
+    return chordOffsets[lo] + t * (chordOffsets[hi] - chordOffsets[lo]);
+  };
+
+  return (
+    <div ref={containerRef} className="relative w-full">
+      {/* Chord row — absolutely positioned over lyrics */}
+      <div className="relative h-10 w-full">
+        {chords.map(chord => {
+          const left = getChordLeft(chord.pos);
+          return (
+            <div
+              key={chord.id}
+              draggable={interactive}
+              onDragStart={interactive ? (e) => onDragStartChord(e, chord) : undefined}
+              style={{ left }}
+              className={`absolute top-0.5 font-bold text-xs ${theme.accent} text-black rounded shadow-sm whitespace-nowrap ${interactive ? 'group/chord cursor-grab active:cursor-grabbing' : ''} z-30 flex flex-col items-center`}
+            >
+              <span className="px-1 py-0 leading-tight">{chord.text}</span>
+              {interactive && (
+                <div className="flex items-center gap-0.5 mt-0.5 opacity-0 group-hover/chord:opacity-100 transition-all">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onMoveChord(chord.id, -1); }}
+                    className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
+                  >
+                    <ChevronLeft size={9} />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onMoveChord(chord.id, 1); }}
+                    className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
+                  >
+                    <ChevronRight size={9} />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Lyrics row — natural flex spacing */}
+      {!isChordOnly && (
+        <div className="flex flex-row h-8 items-center">
+          {lyrics.map(lyric => (
+            <span
+              key={lyric.id}
+              ref={el => { wordRefs.current[lyric.pos] = el; }}
+              className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}
+              onDragOver={interactive ? (e) => e.preventDefault() : undefined}
+              onDrop={interactive && onDropChord ? (e) => onDropChord(e, lyric.pos) : undefined}
+            >
+              {lyric.isX ? '' : lyric.text}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const App = () => {
   // --- Firebase Auth State ---
   const [user, setUser] = useState(null);
@@ -1280,33 +1387,14 @@ const App = () => {
                       const { lyrics: previewLyrics, chords: previewChords } = processFinalWordsToSectionItems(currentStaged, 'prev');
                       const isChordOnlySection = currentStaged.every(w => w.word.toLowerCase() === 'x');
                       return (
-                        <div className="grid grid-cols-[repeat(32,minmax(2rem,max-content))] grid-rows-[auto_auto] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid">
-                          {/* Row 1: chord cells */}
-                          {Array.from({ length: 32 }).map((_, i) => {
-                            const chordsHere = previewChords.filter(c => c.pos === i);
-                            return (
-                              <div key={`pch-${i}`} className="relative h-8 flex items-center" style={{ gridColumn: i + 1, gridRow: 1 }}>
-                                {chordsHere.map(chord => (
-                                  <div key={chord.id} className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap z-30`}>
-                                    {chord.text}
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          })}
-                          {/* Row 2: lyric cells */}
-                          {!isChordOnlySection && Array.from({ length: 32 }).map((_, i) => {
-                            const lyricsHere = previewLyrics.filter(l => l.pos === i);
-                            return (
-                              <div key={`ply-${i}`} className="border-l border-white/5 h-8 flex items-center" style={{ gridColumn: i + 1, gridRow: 2 }}>
-                                {lyricsHere.map(lyric => (
-                                  <span key={lyric.id} className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}>
-                                    {lyric.isX ? <span className="text-gray-400 opacity-50">-</span> : lyric.text}
-                                  </span>
-                                ))}
-                              </div>
-                            );
-                          })}
+                        <div className="min-w-[760px] md:min-w-[680px] lg:min-w-0">
+                          <SectionGrid
+                            lyrics={previewLyrics}
+                            chords={previewChords}
+                            theme={theme}
+                            isChordOnly={isChordOnlySection}
+                            interactive={false}
+                          />
                         </div>
                       );
                     })()}
@@ -1381,62 +1469,18 @@ const App = () => {
                             </button>
 
                             <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
-                              <div className={`grid grid-cols-[repeat(32,minmax(2rem,max-content))] grid-rows-[auto_auto] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
-                                {/* Row 1: chord cells */}
-                                {Array.from({ length: 32 }).map((_, i) => {
-                                  const sectionChords = Array.isArray(section.chords) ? section.chords : [];
-                                  const chordsHere = sectionChords.filter(c => c.pos === i);
-                                  return (
-                                    <div key={`ch-${i}`} className="relative h-10 flex items-start pt-0.5" style={{ gridColumn: i + 1, gridRow: 1 }}>
-                                      {chordsHere.map(chord => (
-                                        <div
-                                          key={chord.id}
-                                          draggable
-                                          onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
-                                          className={`absolute left-0 top-0.5 font-bold text-xs ${theme.accent} text-black rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30 flex flex-col items-center`}
-                                        >
-                                          <span className="px-1 py-0 leading-tight">{chord.text}</span>
-                                          <div className="flex items-center gap-0.5 mt-0.5 opacity-0 group-hover/chord:opacity-100 transition-all">
-                                            <button
-                                              onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
-                                              className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
-                                            >
-                                              <ChevronLeft size={9} />
-                                            </button>
-                                            <button
-                                              onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
-                                              className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
-                                            >
-                                              <ChevronRight size={9} />
-                                            </button>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  );
-                                })}
-                                {/* Row 2: lyric cells */}
-                                {!isChordOnlySection && Array.from({ length: 32 }).map((_, i) => {
-                                  const lyricsHere = (Array.isArray(section.lyrics) ? section.lyrics : []).filter(l => l.pos === i);
-                                  return (
-                                    <div
-                                      key={`ly-${i}`}
-                                      className="border-l border-white/5 h-8 flex items-center hover:bg-white/10 transition-colors"
-                                      style={{ gridColumn: i + 1, gridRow: 2 }}
-                                      onDragOver={(e) => e.preventDefault()}
-                                      onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
-                                    >
-                                      {lyricsHere.map(lyric => (
-                                        <span
-                                          key={lyric.id}
-                                          className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}
-                                        >
-                                          {lyric.isX ? '' : lyric.text}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  );
-                                })}
+                              <div className="min-w-[760px] md:min-w-[680px] lg:min-w-0">
+                                <SectionGrid
+                                  lyrics={Array.isArray(section.lyrics) ? section.lyrics : []}
+                                  chords={Array.isArray(section.chords) ? section.chords : []}
+                                  theme={theme}
+                                  isChordOnly={isChordOnlySection}
+                                  onMoveChord={(chordId, dir) => moveChord(group.id, section.id, chordId, dir)}
+                                  onDragStartChord={(e, chord) => handleDragStartChord(e, group.id, section.id, chord)}
+                                  onDropChord={(e, pos) => handleChordDrop(e, group.id, section.id, pos)}
+                                  groupId={group.id}
+                                  sectionId={section.id}
+                                />
                               </div>
                             </div>
                           </div>
