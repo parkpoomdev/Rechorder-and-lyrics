@@ -1271,7 +1271,7 @@ const App = () => {
                     <GripVertical size={14} />
                   </div>
                   <div className={`flex-1 overflow-x-auto overscroll-x-contain relative py-3 px-3 touch-pan-x`}>
-                    <div className={`grid grid-cols-[repeat(32,minmax(max-content,1fr))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid`}>
+                    <div className={`grid grid-cols-[repeat(32,minmax(0,1.5rem))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid`}>
                       {Array.from({ length: 32 }).map((_, i) => {
                         // Dynamically compute preview sections
                         let currentStaged = [...stagedWords];
@@ -1292,9 +1292,9 @@ const App = () => {
                         return (
                           <div key={`prev-${i}`} className="border-l border-white/5 flex flex-col items-start justify-start relative">
                             {/* Chords */}
-                            <div className="h-8 w-full relative z-20 flex items-center">
+                            <div className="h-8 w-full relative z-20">
                               {chordsHere.map(chord => (
-                                <div key={chord.id} className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap z-30`}>
+                                <div key={chord.id} className={`absolute left-0 top-1/2 -translate-y-1/2 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap z-30`}>
                                   {chord.text}
                                 </div>
                               ))}
@@ -1302,9 +1302,9 @@ const App = () => {
 
                             {/* Lyrics */}
                             {!isChordOnlySection && (
-                              <div className="h-8 w-full relative z-10 flex items-center overflow-visible">
+                              <div className="h-8 w-full relative z-10">
                                 {lyricsHere.map(lyric => (
-                                  <span key={lyric.id} className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}>
+                                  <span key={lyric.id} className={`absolute left-0 top-1/2 -translate-y-1/2 text-base font-medium tracking-wide leading-tight px-0.5 font-mono ${theme.lyricText} whitespace-nowrap`}>
                                     {lyric.isX ? <span className="text-gray-400 opacity-50">-</span> : lyric.text}
                                   </span>
                                 ))}
@@ -1385,7 +1385,7 @@ const App = () => {
                             </button>
 
                             <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
-                              <div className={`grid grid-cols-[repeat(32,minmax(max-content,1fr))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
+                              <div className={`grid grid-cols-[repeat(32,minmax(0,1.5rem))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
                                 {Array.from({ length: 32 }).map((_, i) => {
                                   const sectionChords = Array.isArray(section.chords) ? section.chords : [];
                                   const sectionLyrics = Array.isArray(section.lyrics) ? section.lyrics : [];
@@ -1400,40 +1400,41 @@ const App = () => {
                                       onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
                                     >
                                       {/* Chords */}
-                                      <div className="h-8 w-full relative z-20 flex items-center">
+                                      <div className="h-10 w-full relative z-20">
                                         {chordsHere.map(chord => (
                                           <div
                                             key={chord.id}
                                             draggable
                                             onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
-                                            className={`absolute left-0 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30`}
+                                            className={`absolute left-0 top-0.5 font-bold text-xs ${theme.accent} text-black rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30 flex flex-col items-center`}
                                           >
-                                            <button
-                                              onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
-                                              className="absolute -left-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform -translate-x-1 group-hover/chord:translate-x-0"
-                                            >
-                                              <ChevronLeft size={10} />
-                                            </button>
-                                            {chord.text}
-                                            <button
-                                              onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
-                                              className="absolute -right-5 top-0 bottom-0 m-auto h-4 w-4 bg-[#222] text-white rounded flex items-center justify-center opacity-0 group-hover/chord:opacity-100 hover:bg-white hover:text-black transition-all transform translate-x-1 group-hover/chord:translate-x-0"
-                                            >
-                                              <ChevronRight size={10} />
-                                            </button>
+                                            <span className="px-1 py-0 leading-tight">{chord.text}</span>
+                                            <div className="flex items-center gap-0.5 mt-0.5 opacity-0 group-hover/chord:opacity-100 transition-all">
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
+                                                className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
+                                              >
+                                                <ChevronLeft size={9} />
+                                              </button>
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
+                                                className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
+                                              >
+                                                <ChevronRight size={9} />
+                                              </button>
+                                            </div>
                                           </div>
                                         ))}
                                       </div>
 
                                       {/* Lyrics */}
                                       {!isChordOnlySection && (
-                                        <div className="h-8 w-full relative z-10 flex items-center">
+                                        <div className="h-8 w-full relative z-10">
                                           {lyricsHere.map(lyric => (
                                             <span
                                               key={lyric.id}
-                                              className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}
+                                              className={`absolute left-0 top-1/2 -translate-y-1/2 text-base font-medium tracking-wide leading-tight px-0.5 font-mono ${theme.lyricText} whitespace-nowrap`}
                                             >
-                                              {/* If it's the 'x' token, render nothing but it still consumes space! */}
                                               {lyric.isX ? '' : lyric.text}
                                             </span>
                                           ))}
