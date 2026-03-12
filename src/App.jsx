@@ -1271,49 +1271,48 @@ const App = () => {
                     <GripVertical size={14} />
                   </div>
                   <div className={`flex-1 overflow-x-auto overscroll-x-contain relative py-3 px-3 touch-pan-x`}>
-                    <div className={`grid grid-cols-[repeat(32,minmax(0,1.5rem))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid`}>
-                      {Array.from({ length: 32 }).map((_, i) => {
-                        // Dynamically compute preview sections
-                        let currentStaged = [...stagedWords];
-
-                        if (inputValue.trim()) {
-                          const result = processInputWord(inputValue.trim(), isChordMode, 'preview');
-                          if (!result.error) {
-                            currentStaged.push(result.item);
-                          }
-                        }
-
-                        const { lyrics: previewLyrics, chords: previewChords } = processFinalWordsToSectionItems(currentStaged, 'prev');
-
-                        const chordsHere = previewChords.filter(c => c.pos === i);
-                        const lyricsHere = previewLyrics.filter(l => l.pos === i);
-                        const isChordOnlySection = currentStaged.every(w => w.word.toLowerCase() === 'x');
-
-                        return (
-                          <div key={`prev-${i}`} className="border-l border-white/5 flex flex-col items-start justify-start relative">
-                            {/* Chords */}
-                            <div className="h-8 w-full relative z-20">
-                              {chordsHere.map(chord => (
-                                <div key={chord.id} className={`absolute left-0 top-1/2 -translate-y-1/2 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap z-30`}>
-                                  {chord.text}
-                                </div>
-                              ))}
-                            </div>
-
-                            {/* Lyrics */}
-                            {!isChordOnlySection && (
-                              <div className="h-8 w-full relative z-10">
-                                {lyricsHere.map(lyric => (
-                                  <span key={lyric.id} className={`absolute left-0 top-1/2 -translate-y-1/2 text-base font-medium tracking-wide leading-tight px-0.5 font-mono ${theme.lyricText} whitespace-nowrap`}>
-                                    {lyric.isX ? <span className="text-gray-400 opacity-50">-</span> : lyric.text}
-                                  </span>
-                                ))}
+                    {(() => {
+                      let currentStaged = [...stagedWords];
+                      if (inputValue.trim()) {
+                        const result = processInputWord(inputValue.trim(), isChordMode, 'preview');
+                        if (!result.error) currentStaged.push(result.item);
+                      }
+                      const { lyrics: previewLyrics, chords: previewChords } = processFinalWordsToSectionItems(currentStaged, 'prev');
+                      const isChordOnlySection = currentStaged.every(w => w.word.toLowerCase() === 'x');
+                      return (
+                        <div className="w-full min-w-[760px] md:min-w-[680px] lg:min-w-0 relative group/grid">
+                          {/* Chord overlay row */}
+                          <div className="h-8 w-full relative z-20">
+                            {previewChords.map(chord => (
+                              <div
+                                key={chord.id}
+                                style={{ left: `calc(${chord.pos} * 100% / 32)` }}
+                                className={`absolute top-1/2 -translate-y-1/2 font-bold text-xs ${theme.accent} text-black px-1 py-0 rounded shadow-sm whitespace-nowrap z-30`}
+                              >
+                                {chord.text}
                               </div>
-                            )}
+                            ))}
                           </div>
-                        );
-                      })}
-                    </div>
+                          {/* Lyrics row */}
+                          {!isChordOnlySection && (
+                            <div className="grid grid-cols-[repeat(32,minmax(max-content,1fr))] w-full relative z-10">
+                              {Array.from({ length: 32 }).map((_, i) => {
+                                const lyricsHere = previewLyrics.filter(l => l.pos === i);
+                                return (
+                                  <div key={`prev-${i}`} className="border-l border-white/5 h-8 flex items-center">
+                                    {lyricsHere.map(lyric => (
+                                      <span key={lyric.id} className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}>
+                                        {lyric.isX ? <span className="text-gray-400 opacity-50">-</span> : lyric.text}
+                                      </span>
+                                    ))}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1385,65 +1384,61 @@ const App = () => {
                             </button>
 
                             <div className={`flex-1 overflow-x-auto overscroll-x-contain relative ${isChordOnlySection ? 'py-2 px-3' : 'p-3 pt-4'} touch-pan-x`}>
-                              <div className={`grid grid-cols-[repeat(32,minmax(0,1.5rem))] min-w-[760px] md:min-w-[680px] lg:min-w-0 w-full relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
-                                {Array.from({ length: 32 }).map((_, i) => {
-                                  const sectionChords = Array.isArray(section.chords) ? section.chords : [];
-                                  const sectionLyrics = Array.isArray(section.lyrics) ? section.lyrics : [];
-                                  const chordsHere = sectionChords.filter(c => c.pos === i);
-                                  const lyricsHere = sectionLyrics.filter(l => l.pos === i);
-
-                                  return (
+                              <div className={`w-full min-w-[760px] md:min-w-[680px] lg:min-w-0 relative group/grid ${isChordOnlySection ? '' : 'mb-1.5'}`}>
+                                {/* Chord overlay row — slots are uniform % positions across full width */}
+                                <div className="h-10 w-full relative z-20">
+                                  {(Array.isArray(section.chords) ? section.chords : []).map(chord => (
                                     <div
-                                      key={i}
-                                      className="border-l border-white/5 flex flex-col items-start justify-start relative hover:bg-white/10 transition-colors"
-                                      onDragOver={(e) => e.preventDefault()}
-                                      onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
+                                      key={chord.id}
+                                      draggable
+                                      onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
+                                      style={{ left: `calc(${chord.pos} * 100% / 32)` }}
+                                      className={`absolute top-0.5 font-bold text-xs ${theme.accent} text-black rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30 flex flex-col items-center`}
                                     >
-                                      {/* Chords */}
-                                      <div className="h-10 w-full relative z-20">
-                                        {chordsHere.map(chord => (
-                                          <div
-                                            key={chord.id}
-                                            draggable
-                                            onDragStart={(e) => handleDragStartChord(e, group.id, section.id, chord)}
-                                            className={`absolute left-0 top-0.5 font-bold text-xs ${theme.accent} text-black rounded shadow-sm whitespace-nowrap group/chord cursor-grab active:cursor-grabbing z-30 flex flex-col items-center`}
-                                          >
-                                            <span className="px-1 py-0 leading-tight">{chord.text}</span>
-                                            <div className="flex items-center gap-0.5 mt-0.5 opacity-0 group-hover/chord:opacity-100 transition-all">
-                                              <button
-                                                onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
-                                                className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
-                                              >
-                                                <ChevronLeft size={9} />
-                                              </button>
-                                              <button
-                                                onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
-                                                className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
-                                              >
-                                                <ChevronRight size={9} />
-                                              </button>
-                                            </div>
-                                          </div>
-                                        ))}
+                                      <span className="px-1 py-0 leading-tight">{chord.text}</span>
+                                      <div className="flex items-center gap-0.5 mt-0.5 opacity-0 group-hover/chord:opacity-100 transition-all">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, -1); }}
+                                          className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
+                                        >
+                                          <ChevronLeft size={9} />
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); moveChord(group.id, section.id, chord.id, 1); }}
+                                          className="h-3.5 w-3.5 bg-[#222] text-white rounded flex items-center justify-center hover:bg-white hover:text-black transition-colors"
+                                        >
+                                          <ChevronRight size={9} />
+                                        </button>
                                       </div>
+                                    </div>
+                                  ))}
+                                </div>
 
-                                      {/* Lyrics */}
-                                      {!isChordOnlySection && (
-                                        <div className="h-8 w-full relative z-10">
+                                {/* Lyrics row — grid sized by word content for natural spacing */}
+                                {!isChordOnlySection && (
+                                  <div className="grid grid-cols-[repeat(32,minmax(max-content,1fr))] w-full relative z-10">
+                                    {Array.from({ length: 32 }).map((_, i) => {
+                                      const lyricsHere = (Array.isArray(section.lyrics) ? section.lyrics : []).filter(l => l.pos === i);
+                                      return (
+                                        <div
+                                          key={i}
+                                          className="border-l border-white/5 h-8 flex items-center hover:bg-white/10 transition-colors"
+                                          onDragOver={(e) => e.preventDefault()}
+                                          onDrop={(e) => handleChordDrop(e, group.id, section.id, i)}
+                                        >
                                           {lyricsHere.map(lyric => (
                                             <span
                                               key={lyric.id}
-                                              className={`absolute left-0 top-1/2 -translate-y-1/2 text-base font-medium tracking-wide leading-tight px-0.5 font-mono ${theme.lyricText} whitespace-nowrap`}
+                                              className={`text-base font-medium tracking-wide leading-tight px-1 font-mono ${theme.lyricText} whitespace-nowrap`}
                                             >
                                               {lyric.isX ? '' : lyric.text}
                                             </span>
                                           ))}
                                         </div>
-                                      )}
-
-                                    </div>
-                                  );
-                                })}
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>
