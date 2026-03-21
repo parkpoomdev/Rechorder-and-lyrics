@@ -847,6 +847,56 @@ const App = () => {
     if (name) setFolders([...folders, { id: Date.now(), name, songs: [] }]);
   };
 
+  const renameFolder = (e, folderId, currentName) => {
+    e.stopPropagation();
+    const newName = prompt("Enter new folder name:", currentName);
+    if (newName && newName.trim() !== "") {
+      setFolders(folders.map(f => f.id === folderId ? { ...f, name: newName.trim() } : f));
+    }
+  };
+
+  const deleteFolder = (e, folderId) => {
+    e.stopPropagation();
+    if (window.confirm("Are you sure you want to delete this folder and all its songs?")) {
+      const folderToDelete = folders.find(f => f.id === folderId);
+      const songIdsToDelete = folderToDelete ? folderToDelete.songs.map(s => s.id) : [];
+
+      setFolders(folders.filter(f => f.id !== folderId));
+
+      setSongData(prev => {
+        const newData = { ...prev };
+        songIdsToDelete.forEach(id => delete newData[id]);
+        return newData;
+      });
+
+      if (songIdsToDelete.includes(activeSongId)) {
+        setActiveSongId(null);
+      }
+    }
+  };
+
+  const handleDragStartFolder = (e, folderId) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'folder', folderId }));
+  };
+
+  const handleFolderDrop = (e, targetFolderId) => {
+    e.preventDefault();
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (data.type !== 'folder' || data.folderId === targetFolderId) return;
+
+      const draggedFolderIndex = folders.findIndex(f => f.id === data.folderId);
+      const targetFolderIndex = folders.findIndex(f => f.id === targetFolderId);
+
+      if (draggedFolderIndex === -1 || targetFolderIndex === -1) return;
+
+      const newFolders = [...folders];
+      const [draggedFolder] = newFolders.splice(draggedFolderIndex, 1);
+      newFolders.splice(targetFolderIndex, 0, draggedFolder);
+      setFolders(newFolders);
+    } catch (err) { }
+  };
+
   const addSong = (folderId) => {
     const title = prompt("Enter song title:");
     if (title) {
@@ -1056,12 +1106,40 @@ const App = () => {
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {folders.map(folder => (
-                  <div key={folder.id} className="mb-4">
-                    <div className={`flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText}`}>
-                      <span>{folder.name}</span>
-                      <button onClick={() => addSong(folder.id)} className={`transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`}>
-                        <Plus size={16} />
-                      </button>
+                  <div
+                    key={folder.id}
+                    className="mb-4"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => handleFolderDrop(e, folder.id)}
+                  >
+                    <div
+                      draggable
+                      onDragStart={(e) => handleDragStartFolder(e, folder.id)}
+                      className={`group flex justify-between items-center text-sm uppercase tracking-wider mb-2 font-semibold ${theme.subtleText} cursor-grab active:cursor-grabbing p-1 rounded hover:bg-black/5 transition-colors`}
+                    >
+                      <div className="flex items-center gap-2 truncate flex-1">
+                        <GripVertical size={12} className="opacity-0 group-hover:opacity-50" />
+                        <span className="truncate">{folder.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                        <button
+                          onClick={(e) => renameFolder(e, folder.id, folder.name)}
+                          className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-[#e0d036] transition`}
+                          title="Rename Folder"
+                        >
+                          <Edit3 size={14} />
+                        </button>
+                        <button
+                          onClick={(e) => deleteFolder(e, folder.id)}
+                          className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} hover:text-red-500 transition`}
+                          title="Delete Folder"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); addSong(folder.id); }} className={`p-1 rounded ${isDayMode ? 'hover:bg-[#dcdcd6]' : 'hover:bg-[#444]'} transition ${isDayMode ? 'hover:text-[#1a1a1a]' : 'hover:text-white'}`} title="Add Song">
+                          <Plus size={16} />
+                        </button>
+                      </div>
                     </div>
                     <div className="space-y-1">
                       {folder.songs.map(song => (
@@ -1748,7 +1826,7 @@ const App = () => {
       {/* --- Quick Note Modal --- */}
       {showNoteModal && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className={`${theme.modalCard} p-6 rounded-xl shadow-2xl border ${theme.border} max-w-lg w-full mx-4 flex flex-col relative`}>
+          <div className={`${theme.modalCard} p-6 rounded-xl shadow-2xl border ${theme.border} max-w-2xl w-full mx-4 flex flex-col relative`}>
             <button
               onClick={() => setShowNoteModal(false)}
               className={`absolute top-4 right-4 p-2 rounded-full ${isDayMode ? 'hover:bg-gray-200' : 'hover:bg-gray-700'} transition-colors`}
@@ -1765,7 +1843,7 @@ const App = () => {
             <textarea
               value={notes[activeSongId] || ''}
               onChange={(e) => setNotes(prev => ({ ...prev, [activeSongId]: e.target.value }))}
-              className={`w-full h-48 p-4 rounded-xl border ${theme.border} ${isDayMode ? 'bg-[#f9f9f9]' : 'bg-[#1f1f1f]'} text-sm ${theme.text} resize-none focus:outline-none focus:ring-2 focus:ring-opacity-50 ${isDayMode ? 'focus:ring-[#c9b800]' : 'focus:ring-[#e0d036]'}`}
+              className={`w-full h-64 p-4 rounded-xl border ${theme.border} ${isDayMode ? 'bg-[#f9f9f9]' : 'bg-[#1f1f1f]'} text-sm ${theme.text} resize-none focus:outline-none focus:ring-2 focus:ring-opacity-50 ${isDayMode ? 'focus:ring-[#c9b800]' : 'focus:ring-[#e0d036]'}`}
               placeholder="Type your notes here..."
             />
 
